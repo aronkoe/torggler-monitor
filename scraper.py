@@ -1,16 +1,16 @@
+import json
 import os
-import re
-import math
-import yaml
+import urllib.request
 from datetime import date, timedelta
-from playwright.sync_api import sync_playwright
+
+import yaml
 
 from db import init_db, save_scan
 from sendgrid_email import send_email
 
-SELECTORS = {
-    "price_regex": r"(\d+[.,]?\d*)\s?€",
-}
+PROPERTY_ID = 11806
+SOURCE_ID = 98
+ROOMS_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/rooms?lang=de&sourceId={SOURCE_ID}"
 
 
 def load_config():
@@ -24,50 +24,66 @@ def load_config():
     return {}
 
 
-def parse_price(text: str):
-    m = re.search(SELECTORS["price_regex"], text)
-    if not m:
-        return None
-    s = m.group(1).replace('.', '').replace(',', '.')
-    try:
-        return float(s)
-    except ValueError:
-        return None
+def fetch_json(url: str):
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+            "Referer": "https://www.farmhouse-torgglerhof.com/",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
-def find_min_price_on_page(page):
-    text = page.content()
-    values = []
-    for p in re.findall(SELECTORS["price_regex"], text):
-        s = p.replace('.', '').replace(',', '.')
+def find_cheapest_room():
+    rooms = fetch_json(ROOMS_URL)
+    if not isinstance(rooms, list):
+        return None
+
+    best = None
+    for room in rooms:
+        price = room.get("price_from")
+        if price is None:
+            continue
         try:
-            values.append(float(s))
-        except ValueError:
-            pass
-    return min(values) if values else None
+            value = float(price)
+        except (TypeError, ValueError):
+            continue
+        if best is None or value < best["price"]:
+            best = {
+                "price": value,
+                "room": room.get("title") or "Unbekanntes Zimmer",
+                "room_code": room.get("room_code") or "-",
+            }
+    return best
+
+
+def find_best_date_window(cfg):
+    min_nights = int(cfg.get("MIN_NIGHTS", 2))
+    lookahead_days = int(cfg.get("LOOKAHEAD_DAYS", 30))
+    cheapest_room = find_cheapest_room()
+    if cheapest_room is None:
+        return None
+
+    best = None
+    for offset in range(lookahead_days):
+        start = date.today() + timedelta(days=offset)
+        test_window = {
+            "price": cheapest_room["price"],
+            "start": start.isoformat(),
+            "nights": min_nights,
+            "room": cheapest_room["room"],
+            "room_code": cheapest_room["room_code"],
+        }
+        if best is None or test_window["price"] < best["price"]:
+            best = test_window
+    return best
 
 
 def run_scan(cfg):
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto('https://www.farmhouse-torgglerhof.com/de/online-buchung/', wait_until='domcontentloaded', timeout=60000)
-        page.wait_for_timeout(2000)
-        best = None
-        try:
-            # this is intentionally simple: look for a minimum price on the site across several date windows
-            for offset in range(0, int(cfg.get('LOOKAHEAD_DAYS', 30)), 7):
-                start = date.today() + timedelta(days=offset)
-                # open page again per offset to keep logic simple
-                page.goto('https://www.farmhouse-torgglerhof.com/de/online-buchung/', wait_until='domcontentloaded', timeout=60000)
-                page.wait_for_timeout(1500)
-                price = find_min_price_on_page(page)
-                if price is not None and (best is None or price < best['price']):
-                    best = {'price': price, 'start': start.isoformat(), 'nights': int(cfg.get('MIN_NIGHTS', 2))}
-        except Exception as e:
-            print('Scan error:', e)
-        browser.close()
-        return best
+    return find_best_date_window(cfg)
 
 
 def main():
@@ -75,23 +91,29 @@ def main():
     init_db()
     best = run_scan(cfg)
     if not best:
-        print('No price found')
+        print("No price found")
         return
 
-    print(f"Best: €{best['price']} ab {best['start']} für {best['nights']} Nächte")
-    save_scan(best['price'], best['start'], best['nights'], 'best-room')
+    print(
+        f"Best: €{best['price']} ab {best['start']} für {best['nights']} Nächte "
+        f"({best['room']} / {best['room_code']})"
+    )
+    save_scan(best["price"], best["start"], best["nights"], best["room"])
 
-    threshold = cfg.get('ALARM_THRESHOLD_EUR')
+    threshold = cfg.get("ALARM_THRESHOLD_EUR")
     if threshold is not None:
         try:
-            if float(best['price']) <= float(threshold):
+            if float(best["price"]) <= float(threshold):
                 subject = f"Preisalarm: €{best['price']}"
-                content = f"Gefunden: €{best['price']} ab {best['start']} für {best['nights']} Nächte"
+                content = (
+                    f"Gefunden: €{best['price']} ab {best['start']} für {best['nights']} Nächte "
+                    f"({best['room']} / {best['room_code']})"
+                )
                 send_email(subject, content, cfg)
-                print('Email sent')
+                print("Email sent")
         except Exception as exc:
-            print('Alert error:', exc)
+            print("Alert error:", exc)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

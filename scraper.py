@@ -14,14 +14,30 @@ ROOMS_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_I
 
 
 def load_config():
+    cfg = {}
     cfg_path = os.getenv("CONFIG_PATH", "config.yaml")
     if os.path.exists(cfg_path):
         with open(cfg_path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    if os.path.exists("config.example.yaml"):
+            cfg = yaml.safe_load(f) or {}
+    elif os.path.exists("config.example.yaml"):
         with open("config.example.yaml", "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    return {}
+            cfg = yaml.safe_load(f) or {}
+
+    env_keys = [
+        "SENDGRID_API_KEY",
+        "FROM_EMAIL",
+        "TO_EMAIL",
+        "BOARD_TYPE",
+        "MIN_NIGHTS",
+        "MAX_NIGHTS",
+        "LOOKAHEAD_DAYS",
+        "ALARM_THRESHOLD_EUR",
+    ]
+    for key in env_keys:
+        value = os.getenv(key)
+        if value is not None:
+            cfg[key] = value
+    return cfg
 
 
 def fetch_json(url: str):
@@ -67,15 +83,22 @@ def find_best_date_window(cfg):
     if cheapest_room is None:
         return None
 
+    board_type = str(cfg.get("BOARD_TYPE", "half_board")).lower()
+    board_label = "Halbpension" if board_type in {"half_board", "halbpension", "hp"} else board_type
+
     best = None
     for offset in range(lookahead_days):
         start = date.today() + timedelta(days=offset)
+        nightly_rate = cheapest_room["price"]
+        total_stay_price = nightly_rate * min_nights
         test_window = {
-            "price": cheapest_room["price"],
+            "price": nightly_rate,
+            "total_price": total_stay_price,
             "start": start.isoformat(),
             "nights": min_nights,
             "room": cheapest_room["room"],
             "room_code": cheapest_room["room_code"],
+            "board_type": board_label,
         }
         if best is None or test_window["price"] < best["price"]:
             best = test_window
@@ -95,8 +118,9 @@ def main():
         return
 
     print(
-        f"Best: €{best['price']} ab {best['start']} für {best['nights']} Nächte "
-        f"({best['room']} / {best['room_code']})"
+        f"Best: €{best['price']} pro Nacht inkl. {best['board_type']} "
+        f"ab {best['start']} für {best['nights']} Nächte "
+        f"(gesamt: €{best['total_price']}; {best['room']} / {best['room_code']})"
     )
     save_scan(best["price"], best["start"], best["nights"], best["room"])
 
@@ -104,10 +128,11 @@ def main():
     if threshold is not None:
         try:
             if float(best["price"]) <= float(threshold):
-                subject = f"Preisalarm: €{best['price']}"
+                subject = f"Preisalarm: €{best['price']}/Nacht inkl. {best['board_type']}"
                 content = (
-                    f"Gefunden: €{best['price']} ab {best['start']} für {best['nights']} Nächte "
-                    f"({best['room']} / {best['room_code']})"
+                    f"Gefunden: €{best['price']} pro Nacht inkl. {best['board_type']} "
+                    f"ab {best['start']} für {best['nights']} Nächte "
+                    f"(gesamt: €{best['total_price']}; {best['room']} / {best['room_code']})"
                 )
                 send_email(subject, content, cfg)
                 print("Email sent")

@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: torggler-monitor
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: BOARD_TYPE
+        value: half_board
+      - key: MIN_NIGHTS
+        value: '2'
+      - key: LOOKAHEAD_DAYS
+        value: '30'

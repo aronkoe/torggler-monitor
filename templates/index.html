@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Preis-Monitor</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; }
+      .card { border: 1px solid #ddd; padding: 18px; border-radius: 8px; margin-bottom: 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>Preis-Monitor</h1>
+    <div class="card">
+      <canvas id="chart" height="120"></canvas>
+    </div>
+    <div id="current" class="card">Lade aktuellen Scan…</div>
+
+    <script>
+      async function fetchJson(path) {
+        const r = await fetch(path);
+        return r.ok ? r.json() : null;
+      }
+
+      async function refresh() {
+        const hist = await fetchJson('/api/history');
+        const cur = await fetchJson('/api/current');
+
+        const labels = hist && hist.history ? hist.history.map(h => new Date(h.ts).toLocaleDateString()) : [];
+        const values = hist && hist.history ? hist.history.map(h => h.price) : [];
+
+        const ctx = document.getElementById('chart').getContext('2d');
+        new Chart(ctx, {
+          type: 'line',
+          data: { labels, datasets: [{ label: 'Preis (€)', data: values, borderColor: '#4f46e5', tension: 0.2 }] },
+          options: { responsive: true, scales: { y: { beginAtZero: false } } }
+        });
+
+        if (cur && cur.ok) {
+          const s = cur.scan;
+          document.getElementById('current').innerHTML = `<strong>Aktuell:</strong> €${s.price} – ${s.start_date} (${s.nights} Nächte)<br><em>${s.room}</em>`;
+        } else {
+          document.getElementById('current').innerText = 'Keine Daten';
+        }
+      }
+
+      refresh();
+      setInterval(refresh, 60000);
+    </script>
+  </body>
+</html>

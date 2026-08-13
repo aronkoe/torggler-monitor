@@ -40,7 +40,7 @@ Use this stack:
 1. Push this repo to GitHub.
 2. Create a Render web service from the repo.
 3. Set runtime to Python.
-4. Start command: `gunicorn app:app --bind 0.0.0.0:$PORT`
+4. Start command: `python -m gunicorn app:app --bind 0.0.0.0:$PORT`
 5. Add env vars:
    - `PORT` (Render sets it automatically)
    - `SENDGRID_API_KEY`

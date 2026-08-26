@@ -6,16 +6,98 @@
     <title>Preis-Monitor</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-      body { font-family: Arial, sans-serif; margin: 24px; }
-      .card { border: 1px solid #ddd; padding: 18px; border-radius: 8px; margin-bottom: 16px; }
+      :root {
+        --bg: #f4f7f4;
+        --card: #ffffff;
+        --line: #dfe7df;
+        --text: #1f2a1f;
+        --muted: #566456;
+        --accent: #2e7d32;
+        --accent-soft: #e8f5e9;
+      }
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      .container {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 32px 20px 48px;
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 2rem;
+      }
+      .subtitle {
+        color: var(--muted);
+        margin-bottom: 24px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 20px 22px;
+        margin-bottom: 18px;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+      }
+      .current-price {
+        font-size: 1.8rem;
+        font-weight: 700;
+        margin: 10px 0;
+      }
+      .current-price span {
+        color: var(--accent);
+      }
+      .meta {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .last-update {
+        margin-top: 10px;
+        font-size: 0.9rem;
+        color: var(--muted);
+      }
+      .badge {
+        display: inline-block;
+        background: var(--accent-soft);
+        color: var(--accent);
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 0.85rem;
+        font-weight: 700;
+        margin-bottom: 10px;
+      }
+      .badge.stale {
+        background: #fff4e5;
+        color: #9a5b00;
+      }
+      .empty-state {
+        color: var(--muted);
+        min-height: 120px;
+        display: grid;
+        place-items: center;
+      }
+      canvas {
+        max-height: 260px;
+      }
     </style>
   </head>
   <body>
-    <h1>Preis-Monitor</h1>
-    <div class="card">
-      <canvas id="chart" height="120"></canvas>
+    <div class="container">
+      <h1>Preis-Monitor</h1>
+      <div class="subtitle">Torgglerhof – günstigste Zimmerkategorie inkl. Halbpension</div>
+
+      <div class="card">
+        <div id="status" class="badge">Status wird geprüft</div>
+        <div id="current">Lade aktuellen Scan…</div>
+      </div>
+
+      <div class="card">
+        <canvas id="chart" height="120"></canvas>
+      </div>
     </div>
-    <div id="current" class="card">Lade aktuellen Scan…</div>
 
     <script>
       async function fetchJson(path) {
@@ -23,29 +105,84 @@
         return r.ok ? r.json() : null;
       }
 
+      function formatMoney(value) {
+        return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
+      }
+
       async function refresh() {
-        const hist = await fetchJson('/api/history');
-        const cur = await fetchJson('/api/current');
+        const [hist, cur] = await Promise.all([
+          fetchJson('/api/history'),
+          fetchJson('/api/current')
+        ]);
 
         const labels = hist && hist.history ? hist.history.map(h => new Date(h.ts).toLocaleDateString()) : [];
         const values = hist && hist.history ? hist.history.map(h => h.price) : [];
 
         const ctx = document.getElementById('chart').getContext('2d');
-        new Chart(ctx, {
+
+        if (window.priceChart) {
+          window.priceChart.destroy();
+        }
+
+        if (!values.length) {
+          document.getElementById('chart').replaceWith(Object.assign(document.createElement('div'), {
+            className: 'empty-state',
+            textContent: 'Noch keine Preisdaten vorhanden.'
+          }));
+        } else {
+          window.priceChart = new Chart(ctx, {
           type: 'line',
-          data: { labels, datasets: [{ label: 'Preis (€)', data: values, borderColor: '#4f46e5', tension: 0.2 }] },
-          options: { responsive: true, scales: { y: { beginAtZero: false } } }
-        });
+          data: {
+            labels,
+            datasets: [{
+              label: 'Preis pro Nacht (€)',
+              data: values,
+              borderColor: '#2e7d32',
+              backgroundColor: 'rgba(46, 125, 50, 0.15)',
+              tension: 0.2,
+              fill: true,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              y: { beginAtZero: false }
+            }
+          }
+          });
+        }
 
         if (cur && cur.ok) {
           const s = cur.scan;
-          document.getElementById('current').innerHTML = `<strong>Aktuell:</strong> €${s.price} – ${s.start_date} (${s.nights} Nächte)<br><em>${s.room}</em>`;
+          const total = s.nights * s.price;
+          const updatedDate = s.ts ? new Date(s.ts) : null;
+          const updatedAt = updatedDate ? updatedDate.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) : 'unbekannt';
+          const isStale = !updatedDate || Date.now() - updatedDate.getTime() > 24 * 60 * 60 * 1000;
+          const status = document.getElementById('status');
+          status.textContent = isStale ? 'Veraltete Daten' : 'Aktualisiert';
+          status.classList.toggle('stale', isStale);
+          document.getElementById('current').innerHTML = `
+            <div class="current-price"><span>${formatMoney(s.price)}</span> / Nacht inkl. Halbpension</div>
+            <div class="meta">
+              <strong>${s.start_date}</strong> – ${s.nights} Nächte<br>
+              Gesamt: <strong>${formatMoney(total)}</strong><br>
+              Zimmer: <em>${s.room}</em>
+            </div>
+            <div class="last-update">Letztes Update: ${updatedAt}</div>
+          `;
         } else {
+          document.getElementById('status').textContent = 'Keine Verbindung';
+          document.getElementById('status').classList.add('stale');
           document.getElementById('current').innerText = 'Keine Daten';
         }
       }
 
-      refresh();
+      refresh().catch(() => {
+        document.getElementById('status').textContent = 'Keine Verbindung';
+        document.getElementById('status').classList.add('stale');
+        document.getElementById('current').innerText = 'Daten konnten nicht geladen werden.';
+      });
       setInterval(refresh, 60000);
     </script>
   </body>

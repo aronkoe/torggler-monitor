@@ -94,9 +94,9 @@ def fetch_json(url: str):
         with urllib.request.urlopen(req, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as exc:
-        print(f"Urllib fetch failed ({exc}), trying Playwright response interceptor...")
+        print(f"Urllib fetch failed ({exc}), trying Playwright expect_response...")
 
-    # Tier 3: Try Playwright with response interception on site booking page
+    # Tier 3: Try Playwright expect_response on site booking page
     browser_error = None
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
@@ -110,61 +110,26 @@ def fetch_json(url: str):
         context = browser.new_context(
             locale="de-DE",
             user_agent=DEFAULT_HEADERS["User-Agent"],
-            bypass_csp=True,
         )
         page = context.new_page()
-        captured_data = []
-        captured_statuses = []
-
-        def handle_response(response):
-            if "bookingsuedtirol.com" in response.url:
-                captured_statuses.append(f"{response.status} {response.url}")
-                if "rooms" in response.url and response.status == 200:
-                    try:
-                        captured_data.append(response.json())
-                    except Exception:
-                        pass
-
-        page.on("response", handle_response)
         try:
-            # First try direct request in browser context
-            api_resp = context.request.get(url, headers=DEFAULT_HEADERS, timeout=15000)
-            if api_resp is not None and api_resp.status < 400:
-                browser.close()
-                return json.loads(api_resp.text())
-
-            # Navigate to booking page where widget fires the API call natively
-            page.goto(
-                "https://www.farmhouse-torgglerhof.com/de/online-buchung/",
-                wait_until="domcontentloaded",
-                timeout=25000,
-            )
-            page.wait_for_timeout(4000)
-
-            if not captured_data:
-                try:
-                    eval_res = page.evaluate(
-                        """async (apiUrl) => {
-                            const r = await fetch(apiUrl, { headers: { 'Accept': 'application/json' } });
-                            return { status: r.status, text: await r.text() };
-                        }""",
-                        url,
-                    )
-                    if eval_res and eval_res.get("status") == 200:
-                        captured_data.append(json.loads(eval_res["text"]))
-                except Exception as eval_exc:
-                    print(f"Page evaluate fetch failed: {eval_exc}")
+            with page.expect_response(
+                lambda r: "bookingsuedtirol.com" in r.url and "rooms" in r.url and r.status == 200,
+                timeout=30000,
+            ) as resp_info:
+                page.goto(
+                    "https://www.farmhouse-torgglerhof.com/de/online-buchung/",
+                    wait_until="commit",
+                    timeout=30000,
+                )
+            resp = resp_info.value
+            return resp.json()
         except Exception as exc:
             browser_error = exc
         finally:
             browser.close()
 
-        if captured_data:
-            return captured_data[0]
-
-        print(f"Intercepted responses status: {captured_statuses}")
-
-    raise RuntimeError(f"Could not fetch booking API (error: {browser_error}, statuses: {captured_statuses})") from browser_error
+    raise RuntimeError(f"Could not fetch booking API: {browser_error}") from browser_error
 
 
 def find_cheapest_room():

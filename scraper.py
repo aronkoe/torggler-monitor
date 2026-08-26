@@ -91,7 +91,11 @@ def fetch_json(url: str):
         )
         page = context.new_page()
         try:
-            response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            response = context.request.get(
+                url,
+                headers={"Accept": "application/json"},
+                timeout=30000,
+            )
             if response is not None and response.status < 400:
                 return json.loads(response.text())
 
@@ -100,17 +104,26 @@ def fetch_json(url: str):
                 wait_until="domcontentloaded",
                 timeout=30000,
             )
-            result = page.evaluate(
-                """
-                async (apiUrl) => {
-                    const response = await fetch(apiUrl, {
-                        headers: { Accept: "application/json" }
-                    });
-                    return { status: response.status, text: await response.text() };
-                }
-                """,
-                url,
-            )
+            result = None
+            for attempt in range(2):
+                try:
+                    result = page.evaluate(
+                        """
+                        async (apiUrl) => {
+                            const response = await fetch(apiUrl, {
+                                headers: { Accept: "application/json" }
+                            });
+                            return { status: response.status, text: await response.text() };
+                        }
+                        """,
+                        url,
+                    )
+                    if result["status"] < 500:
+                        break
+                except Exception as exc:
+                    browser_error = exc
+            if result is None:
+                raise RuntimeError("Browser fetch returned no response")
             if result["status"] >= 400:
                 browser_error = RuntimeError(
                     f"Browser request failed with status {result['status']}"

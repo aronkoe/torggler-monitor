@@ -4,6 +4,7 @@ import urllib.request
 from datetime import date, timedelta
 from urllib.error import HTTPError
 
+import requests
 import yaml
 from playwright.sync_api import sync_playwright
 
@@ -77,13 +78,24 @@ DEFAULT_HEADERS = {
 
 
 def fetch_json(url: str):
+    # Tier 1: Try requests
+    try:
+        resp = requests.get(url, headers=DEFAULT_HEADERS, timeout=15)
+        if resp.status_code < 400:
+            return resp.json()
+        print(f"Requests fetch returned status {resp.status_code}, trying urllib...")
+    except Exception as exc:
+        print(f"Requests fetch failed ({exc}), trying urllib...")
+
+    # Tier 2: Try urllib
     req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as exc:
-        print(f"Direct fetch failed ({exc}), trying Playwright fallback...")
+        print(f"Urllib fetch failed ({exc}), trying Playwright fallback...")
 
+    # Tier 3: Try Playwright with full headers
     browser_error = None
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -99,11 +111,20 @@ def fetch_json(url: str):
         try:
             response = context.request.get(
                 url,
-                headers={"Accept": "application/json"},
+                headers=DEFAULT_HEADERS,
                 timeout=30000,
             )
             if response is not None and response.status < 400:
                 return json.loads(response.text())
+
+            page.set_extra_http_headers({
+                "Referer": DEFAULT_HEADERS["Referer"],
+                "Origin": DEFAULT_HEADERS["Origin"],
+            })
+            resp = page.goto(url, wait_until="commit", timeout=20000)
+            if resp is not None and resp.status < 400:
+                text = page.inner_text("body")
+                return json.loads(text)
 
             page.goto(
                 "https://www.farmhouse-torgglerhof.com/",

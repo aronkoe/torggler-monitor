@@ -63,31 +63,37 @@ def load_config():
     return cfg
 
 
+DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.farmhouse-torgglerhof.com/",
+    "Origin": "https://www.farmhouse-torgglerhof.com",
+    "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+}
+
+
 def fetch_json(url: str):
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json",
-            "Referer": "https://www.farmhouse-torgglerhof.com/",
-        },
-    )
+    req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        if exc.code != 403:
-            raise
+    except Exception as exc:
+        print(f"Direct fetch failed ({exc}), trying Playwright fallback...")
 
     browser_error = None
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context(
             locale="de-DE",
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            ),
+            user_agent=DEFAULT_HEADERS["User-Agent"],
+            extra_http_headers={
+                "Referer": DEFAULT_HEADERS["Referer"],
+                "Origin": DEFAULT_HEADERS["Origin"],
+            },
         )
         page = context.new_page()
         try:
@@ -101,8 +107,8 @@ def fetch_json(url: str):
 
             page.goto(
                 "https://www.farmhouse-torgglerhof.com/",
-                wait_until="domcontentloaded",
-                timeout=30000,
+                wait_until="commit",
+                timeout=20000,
             )
             result = None
             for attempt in range(2):
@@ -118,15 +124,15 @@ def fetch_json(url: str):
                         """,
                         url,
                     )
-                    if result["status"] < 500:
+                    if result and result.get("status", 500) < 500:
                         break
                 except Exception as exc:
                     browser_error = exc
             if result is None:
-                raise RuntimeError("Browser fetch returned no response")
-            if result["status"] >= 400:
+                raise RuntimeError(f"Browser fetch returned no response: {browser_error}")
+            if result.get("status", 500) >= 400:
                 browser_error = RuntimeError(
-                    f"Browser request failed with status {result['status']}"
+                    f"Browser request failed with status {result.get('status')}"
                 )
             else:
                 return json.loads(result["text"])
@@ -210,9 +216,10 @@ def main():
     save_scan(best["price"], best["start"], best["nights"], best["room"])
 
     threshold = cfg.get("ALARM_THRESHOLD_EUR")
-    if threshold is not None:
+    if threshold is not None and str(threshold).strip() != "":
         try:
-            if float(best["price"]) <= float(threshold):
+            thresh_val = float(threshold)
+            if float(best["price"]) <= thresh_val:
                 subject = f"Preisalarm: €{best['price']}/Nacht inkl. {best['board_type']}"
                 content = (
                     f"Gefunden: €{best['price']} pro Nacht inkl. {best['board_type']} "

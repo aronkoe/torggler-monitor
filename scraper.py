@@ -93,74 +93,49 @@ def fetch_json(url: str):
         with urllib.request.urlopen(req, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as exc:
-        print(f"Urllib fetch failed ({exc}), trying Playwright fallback...")
+        print(f"Urllib fetch failed ({exc}), trying Playwright response interceptor...")
 
-    # Tier 3: Try Playwright with full headers
+    # Tier 3: Try Playwright with response interception on site booking page
     browser_error = None
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context(
             locale="de-DE",
             user_agent=DEFAULT_HEADERS["User-Agent"],
-            extra_http_headers={
-                "Referer": DEFAULT_HEADERS["Referer"],
-                "Origin": DEFAULT_HEADERS["Origin"],
-            },
         )
         page = context.new_page()
+        captured_data = []
+
+        def handle_response(response):
+            if "bookingsuedtirol.com" in response.url and "rooms" in response.url:
+                try:
+                    if response.status == 200:
+                        captured_data.append(response.json())
+                except Exception:
+                    pass
+
+        page.on("response", handle_response)
         try:
-            response = context.request.get(
-                url,
-                headers=DEFAULT_HEADERS,
-                timeout=30000,
-            )
-            if response is not None and response.status < 400:
-                return json.loads(response.text())
+            # First try direct request in browser context
+            api_resp = context.request.get(url, headers=DEFAULT_HEADERS, timeout=15000)
+            if api_resp is not None and api_resp.status < 400:
+                browser.close()
+                return json.loads(api_resp.text())
 
-            page.set_extra_http_headers({
-                "Referer": DEFAULT_HEADERS["Referer"],
-                "Origin": DEFAULT_HEADERS["Origin"],
-            })
-            resp = page.goto(url, wait_until="commit", timeout=20000)
-            if resp is not None and resp.status < 400:
-                text = page.inner_text("body")
-                return json.loads(text)
-
+            # Navigate to booking page where widget fires the API call natively
             page.goto(
-                "https://www.farmhouse-torgglerhof.com/",
-                wait_until="commit",
+                "https://www.farmhouse-torgglerhof.com/de/online-buchung/",
+                wait_until="domcontentloaded",
                 timeout=20000,
             )
-            result = None
-            for attempt in range(2):
-                try:
-                    result = page.evaluate(
-                        """
-                        async (apiUrl) => {
-                            const response = await fetch(apiUrl, {
-                                headers: { Accept: "application/json" }
-                            });
-                            return { status: response.status, text: await response.text() };
-                        }
-                        """,
-                        url,
-                    )
-                    if result and result.get("status", 500) < 500:
-                        break
-                except Exception as exc:
-                    browser_error = exc
-            if result is None:
-                raise RuntimeError(f"Browser fetch returned no response: {browser_error}")
-            if result.get("status", 500) >= 400:
-                browser_error = RuntimeError(
-                    f"Browser request failed with status {result.get('status')}"
-                )
-            else:
-                return json.loads(result["text"])
+            page.wait_for_timeout(3000)
         except Exception as exc:
             browser_error = exc
         finally:
             browser.close()
+
+        if captured_data:
+            return captured_data[0]
 
     raise RuntimeError(f"Could not fetch booking API: {browser_error}") from browser_error
 

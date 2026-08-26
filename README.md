@@ -19,7 +19,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 playwright install --with-deps
 cp config.example.yaml config.yaml
-# configure SENDGRID_API_KEY, FROM_EMAIL, TO_EMAIL, ALARM_THRESHOLD_EUR
+# keep real credentials in .env or environment variables, never in config.yaml
 python scraper.py
 python app.py
 ```
@@ -43,7 +43,11 @@ Use this stack:
 4. Start command: `python -m gunicorn app:app --bind 0.0.0.0:$PORT`
 5. Add env vars:
    - `PORT` (Render sets it automatically)
-   - `SENDGRID_API_KEY`
+   - `EMAIL_PROVIDER=smtp`
+   - `SMTP_HOST=smtp.gmail.com`
+   - `SMTP_PORT=587`
+   - `SMTP_USERNAME`
+   - `SMTP_PASSWORD` (Google App Password)
    - `FROM_EMAIL`
    - `TO_EMAIL`
    - `ALARM_THRESHOLD_EUR`
@@ -52,11 +56,10 @@ Use this stack:
    - `LOOKAHEAD_DAYS=30`
 
 ### Email alerts
-1. Create a free SendGrid account.
-2. Create an API key with Mail Send permissions.
-3. Save the key in GitHub Secrets as `SENDGRID_API_KEY`.
-4. Set `FROM_EMAIL` and `TO_EMAIL` in repo secrets or config.
-5. Keep `ALARM_THRESHOLD_EUR` low enough to trigger real alerts.
+1. Create a Google App Password for the Gmail account.
+2. Save `SMTP_USERNAME` and `SMTP_PASSWORD` in GitHub Secrets.
+3. Set `FROM_EMAIL` and `TO_EMAIL` in GitHub Secrets or Render environment variables.
+4. Keep `ALARM_THRESHOLD_EUR` low enough to trigger real alerts.
 
 ### Daily update
 The workflow runs every day at 08:00 UTC and commits the updated `data.db` back to the repo.

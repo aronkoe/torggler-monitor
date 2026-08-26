@@ -79,37 +79,50 @@ def fetch_json(url: str):
         if exc.code != 403:
             raise
 
+    browser_error = None
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(
+        context = browser.new_context(
             locale="de-DE",
             user_agent=(
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             ),
         )
-        page.goto(
-            "https://www.farmhouse-torgglerhof.com/",
-            wait_until="domcontentloaded",
-            timeout=30000,
-        )
-        result = page.evaluate(
-            """
-            async (apiUrl) => {
-                const response = await fetch(apiUrl, {
-                    headers: { Accept: "application/json" }
-                });
-                return { status: response.status, text: await response.text() };
-            }
-            """,
-            url,
-        )
-        if result["status"] >= 400:
+        page = context.new_page()
+        try:
+            response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            if response is not None and response.status < 400:
+                return json.loads(response.text())
+
+            page.goto(
+                "https://www.farmhouse-torgglerhof.com/",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            result = page.evaluate(
+                """
+                async (apiUrl) => {
+                    const response = await fetch(apiUrl, {
+                        headers: { Accept: "application/json" }
+                    });
+                    return { status: response.status, text: await response.text() };
+                }
+                """,
+                url,
+            )
+            if result["status"] >= 400:
+                browser_error = RuntimeError(
+                    f"Browser request failed with status {result['status']}"
+                )
+            else:
+                return json.loads(result["text"])
+        except Exception as exc:
+            browser_error = exc
+        finally:
             browser.close()
-            raise RuntimeError(f"Browser request failed with status {result['status']}")
-        payload = result["text"]
-        browser.close()
-        return json.loads(payload)
+
+    raise RuntimeError(f"Could not fetch booking API: {browser_error}") from browser_error
 
 
 def find_cheapest_room():

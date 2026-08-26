@@ -41,7 +41,7 @@ jobs:
         run: |
           python scraper.py
       - name: Commit DB if changed
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule' || !contains(github.event.head_commit.message, 'Update scan DB')
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

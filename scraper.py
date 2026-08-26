@@ -88,12 +88,26 @@ def fetch_json(url: str):
                 "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             ),
         )
-        response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        if response is None or response.status >= 400:
-            status = response.status if response is not None else "no response"
+        page.goto(
+            "https://www.farmhouse-torgglerhof.com/",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
+        result = page.evaluate(
+            """
+            async (apiUrl) => {
+                const response = await fetch(apiUrl, {
+                    headers: { Accept: "application/json" }
+                });
+                return { status: response.status, text: await response.text() };
+            }
+            """,
+            url,
+        )
+        if result["status"] >= 400:
             browser.close()
-            raise RuntimeError(f"Browser request failed with status {status}")
-        payload = response.text()
+            raise RuntimeError(f"Browser request failed with status {result['status']}")
+        payload = result["text"]
         browser.close()
         return json.loads(payload)
 

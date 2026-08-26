@@ -98,21 +98,31 @@ def fetch_json(url: str):
     # Tier 3: Try Playwright with response interception on site booking page
     browser_error = None
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+            ],
+        )
         context = browser.new_context(
             locale="de-DE",
             user_agent=DEFAULT_HEADERS["User-Agent"],
+            bypass_csp=True,
         )
         page = context.new_page()
         captured_data = []
+        captured_statuses = []
 
         def handle_response(response):
-            if "bookingsuedtirol.com" in response.url and "rooms" in response.url:
-                try:
-                    if response.status == 200:
+            if "bookingsuedtirol.com" in response.url:
+                captured_statuses.append(f"{response.status} {response.url}")
+                if "rooms" in response.url and response.status == 200:
+                    try:
                         captured_data.append(response.json())
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
 
         page.on("response", handle_response)
         try:
@@ -126,9 +136,23 @@ def fetch_json(url: str):
             page.goto(
                 "https://www.farmhouse-torgglerhof.com/de/online-buchung/",
                 wait_until="domcontentloaded",
-                timeout=20000,
+                timeout=25000,
             )
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(4000)
+
+            if not captured_data:
+                try:
+                    eval_res = page.evaluate(
+                        """async (apiUrl) => {
+                            const r = await fetch(apiUrl, { headers: { 'Accept': 'application/json' } });
+                            return { status: r.status, text: await r.text() };
+                        }""",
+                        url,
+                    )
+                    if eval_res and eval_res.get("status") == 200:
+                        captured_data.append(json.loads(eval_res["text"]))
+                except Exception as eval_exc:
+                    print(f"Page evaluate fetch failed: {eval_exc}")
         except Exception as exc:
             browser_error = exc
         finally:
@@ -137,7 +161,9 @@ def fetch_json(url: str):
         if captured_data:
             return captured_data[0]
 
-    raise RuntimeError(f"Could not fetch booking API: {browser_error}") from browser_error
+        print(f"Intercepted responses status: {captured_statuses}")
+
+    raise RuntimeError(f"Could not fetch booking API (error: {browser_error}, statuses: {captured_statuses})") from browser_error
 
 
 def find_cheapest_room():
@@ -197,35 +223,43 @@ def run_scan(cfg):
 
 
 def main():
-    cfg = load_config()
-    init_db()
-    best = run_scan(cfg)
-    if not best:
-        print("No price found")
-        return
+    try:
+        cfg = load_config()
+        init_db()
+        best = run_scan(cfg)
+        if not best:
+            print("No price found")
+            import sys
+            sys.exit(1)
 
-    print(
-        f"Best: €{best['price']} pro Nacht inkl. {best['board_type']} "
-        f"ab {best['start']} für {best['nights']} Nächte "
-        f"(gesamt: €{best['total_price']}; {best['room']} / {best['room_code']})"
-    )
-    save_scan(best["price"], best["start"], best["nights"], best["room"])
+        print(
+            f"Best: €{best['price']} pro Nacht inkl. {best['board_type']} "
+            f"ab {best['start']} für {best['nights']} Nächte "
+            f"(gesamt: €{best['total_price']}; {best['room']} / {best['room_code']})"
+        )
+        save_scan(best["price"], best["start"], best["nights"], best["room"])
 
-    threshold = cfg.get("ALARM_THRESHOLD_EUR")
-    if threshold is not None and str(threshold).strip() != "":
-        try:
-            thresh_val = float(threshold)
-            if float(best["price"]) <= thresh_val:
-                subject = f"Preisalarm: €{best['price']}/Nacht inkl. {best['board_type']}"
-                content = (
-                    f"Gefunden: €{best['price']} pro Nacht inkl. {best['board_type']} "
-                    f"ab {best['start']} für {best['nights']} Nächte "
-                    f"(gesamt: €{best['total_price']}; {best['room']} / {best['room_code']})"
-                )
-                send_email(subject, content, cfg)
-                print("Email sent")
-        except Exception as exc:
-            print("Alert error:", exc)
+        threshold = cfg.get("ALARM_THRESHOLD_EUR")
+        if threshold is not None and str(threshold).strip() != "":
+            try:
+                thresh_val = float(threshold)
+                if float(best["price"]) <= thresh_val:
+                    subject = f"Preisalarm: €{best['price']}/Nacht inkl. {best['board_type']}"
+                    content = (
+                        f"Gefunden: €{best['price']} pro Nacht inkl. {best['board_type']} "
+                        f"ab {best['start']} für {best['nights']} Nächte "
+                        f"(gesamt: €{best['total_price']}; {best['room']} / {best['room_code']})"
+                    )
+                    send_email(subject, content, cfg)
+                    print("Email sent")
+            except Exception as exc:
+                print("Alert error:", exc)
+    except Exception as exc:
+        import traceback
+        import sys
+        print(f"Scraper execution failed: {exc}")
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

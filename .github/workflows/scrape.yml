@@ -22,8 +22,17 @@ jobs:
       - name: Run scraper
         env:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          EMAIL_PROVIDER: smtp
+          SMTP_HOST: smtp.gmail.com
+          SMTP_PORT: 587
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          ALARM_THRESHOLD_EUR: ${{ secrets.ALARM_THRESHOLD_EUR }}
+          BOARD_TYPE: half_board
+          MIN_NIGHTS: 2
+          LOOKAHEAD_DAYS: 30
         run: |
           python scraper.py
       - name: Commit DB if changed

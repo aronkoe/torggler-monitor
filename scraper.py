@@ -2,8 +2,10 @@ import json
 import os
 import urllib.request
 from datetime import date, timedelta
+from urllib.error import HTTPError
 
 import yaml
+from playwright.sync_api import sync_playwright
 
 from db import init_db, save_scan
 from sendgrid_email import send_email
@@ -13,7 +15,22 @@ SOURCE_ID = 98
 ROOMS_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/rooms?lang=de&sourceId={SOURCE_ID}"
 
 
+def load_dotenv_if_exists(path: str = ".env"):
+    if not os.path.exists(path):
+        return
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"\'')
+            os.environ.setdefault(key, value)
+
+
 def load_config():
+    load_dotenv_if_exists()
     cfg = {}
     cfg_path = os.getenv("CONFIG_PATH", "config.yaml")
     if os.path.exists(cfg_path):
@@ -25,6 +42,12 @@ def load_config():
 
     env_keys = [
         "SENDGRID_API_KEY",
+        "EMAIL_PROVIDER",
+        "SMTP_HOST",
+        "SMTP_PORT",
+        "SMTP_USERNAME",
+        "SMTP_PASSWORD",
+        "SMTP_USE_TLS",
         "FROM_EMAIL",
         "TO_EMAIL",
         "BOARD_TYPE",
@@ -49,8 +72,30 @@ def fetch_json(url: str):
             "Referer": "https://www.farmhouse-torgglerhof.com/",
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        if exc.code != 403:
+            raise
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(
+            locale="de-DE",
+            user_agent=(
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+        )
+        response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        if response is None or response.status >= 400:
+            status = response.status if response is not None else "no response"
+            browser.close()
+            raise RuntimeError(f"Browser request failed with status {status}")
+        payload = response.text()
+        browser.close()
+        return json.loads(payload)
 
 
 def find_cheapest_room():

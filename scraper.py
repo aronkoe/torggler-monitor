@@ -11,6 +11,7 @@ from playwright.sync_api import sync_playwright
 from db import init_db, save_scan
 from sendgrid_email import send_email
 
+# Torggler Price Monitor Scraper
 PROPERTY_ID = 11806
 SOURCE_ID = 98
 ROOMS_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/rooms?lang=de&sourceId={SOURCE_ID}"

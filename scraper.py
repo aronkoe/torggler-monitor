@@ -79,14 +79,26 @@ DEFAULT_HEADERS = {
 
 
 def fetch_json(url: str):
-    # Tier 1: Try requests
+    # Tier 1: Try requests.Session with session initialization on target website
     try:
-        resp = requests.get(url, headers=DEFAULT_HEADERS, timeout=15)
+        session = requests.Session()
+        session_headers = {
+            "User-Agent": DEFAULT_HEADERS["User-Agent"],
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": DEFAULT_HEADERS["Accept-Language"],
+        }
+        # Visit online-buchung page to establish session & cookies
+        session.get("https://www.farmhouse-torgglerhof.com/de/online-buchung/", headers=session_headers, timeout=10)
+        
+        # Query API with full headers & session cookies
+        api_headers = DEFAULT_HEADERS.copy()
+        api_headers["Referer"] = "https://www.farmhouse-torgglerhof.com/de/online-buchung/"
+        resp = session.get(url, headers=api_headers, timeout=15)
         if resp.status_code < 400:
             return resp.json()
-        print(f"Requests fetch returned status {resp.status_code}, trying urllib...")
+        print(f"Requests Session fetch returned status {resp.status_code}, trying urllib...")
     except Exception as exc:
-        print(f"Requests fetch failed ({exc}), trying urllib...")
+        print(f"Requests Session fetch failed ({exc}), trying urllib...")
 
     # Tier 2: Try urllib
     req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
@@ -119,7 +131,7 @@ def fetch_json(url: str):
             ) as resp_info:
                 page.goto(
                     "https://www.farmhouse-torgglerhof.com/de/online-buchung/",
-                    wait_until="commit",
+                    wait_until="domcontentloaded",
                     timeout=30000,
                 )
             resp = resp_info.value

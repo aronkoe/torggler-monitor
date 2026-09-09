@@ -2,7 +2,6 @@ import json
 import os
 import urllib.request
 from datetime import date, timedelta
-from urllib.error import HTTPError
 
 import requests
 import yaml
@@ -15,6 +14,7 @@ from sendgrid_email import send_email
 PROPERTY_ID = 11806
 SOURCE_ID = 98
 ROOMS_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/rooms?lang=de&sourceId={SOURCE_ID}"
+OFFERS_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/offers"
 
 
 def load_dotenv_if_exists(path: str = ".env"):
@@ -83,7 +83,7 @@ def get_proxy_url():
     return os.getenv("SCRAPER_PROXY_URL", "").strip() or None
 
 
-def fetch_json(url: str):
+def fetch_json(url: str, browser_fallback: bool = True):
     # Tier 1: Try requests.Session with session initialization on target website
     try:
         session = requests.Session()
@@ -122,6 +122,9 @@ def fetch_json(url: str):
             return json.loads(response.read().decode("utf-8"))
     except Exception as exc:
         print(f"Urllib fetch failed ({exc}), trying Playwright expect_response...")
+
+    if not browser_fallback:
+        raise RuntimeError(f"Could not fetch booking API URL: {url}")
 
     # Tier 3: Try Playwright expect_response on site booking page
     browser_error = None
@@ -163,55 +166,62 @@ def fetch_json(url: str):
     raise RuntimeError(f"Could not fetch booking API: {browser_error}") from browser_error
 
 
-def find_cheapest_room():
-    rooms = fetch_json(ROOMS_URL)
-    if not isinstance(rooms, list):
-        return None
-
-    best = None
-    for room in rooms:
-        price = room.get("price_from")
-        if price is None:
-            continue
-        try:
-            value = float(price)
-        except (TypeError, ValueError):
-            continue
-        if best is None or value < best["price"]:
-            best = {
-                "price": value,
-                "room": room.get("title") or "Unbekanntes Zimmer",
-                "room_code": room.get("room_code") or "-",
-            }
-    return best
-
-
 def find_best_date_window(cfg):
     min_nights = int(cfg.get("MIN_NIGHTS", 2))
     lookahead_days = int(cfg.get("LOOKAHEAD_DAYS", 30))
-    cheapest_room = find_cheapest_room()
-    if cheapest_room is None:
-        return None
-
     board_type = str(cfg.get("BOARD_TYPE", "half_board")).lower()
     board_label = "Halbpension" if board_type in {"half_board", "halbpension", "hp"} else board_type
+    service_id = 3 if board_type in {"half_board", "halbpension", "hp"} else 2
+
+    rooms = fetch_json(ROOMS_URL)
+    room_names = {
+        str(room.get("room_id")): room.get("title") or "Unbekanntes Zimmer"
+        for room in rooms
+        if isinstance(room, dict) and room.get("room_id") is not None
+    }
 
     best = None
     for offset in range(lookahead_days):
         start = date.today() + timedelta(days=offset)
-        nightly_rate = cheapest_room["price"]
-        total_stay_price = nightly_rate * min_nights
-        test_window = {
-            "price": nightly_rate,
-            "total_price": total_stay_price,
-            "start": start.isoformat(),
-            "nights": min_nights,
-            "room": cheapest_room["room"],
-            "room_code": cheapest_room["room_code"],
-            "board_type": board_label,
+        end = start + timedelta(days=min_nights)
+        query = (
+            f"?correlationId=torggler-monitor&from={start.isoformat()}"
+            f"&to={end.isoformat()}&guestCount=2&guests=%5B%5B18%2C18%5D%5D"
+            f"&lang=de&maxAdults=4&maxChildren=3&sourceId={SOURCE_ID}"
+        )
+        try:
+            offers = fetch_json(OFFERS_URL + query, browser_fallback=False)
+        except RuntimeError as exc:
+            print(f"Offer fetch failed for {start}: {exc}")
+            continue
+
+        offer_names = {
+            str(offer.get("offer_id")): offer.get("title")
+            for offer in offers.get("defaultOffers", [])
+            if isinstance(offer, dict) and offer.get("offer_id") is not None
         }
-        if best is None or test_window["price"] < best["price"]:
-            best = test_window
+        for rate in offers.get("rates", []):
+            if rate.get("service") != service_id or rate.get("price_total") is None:
+                continue
+            try:
+                total_stay_price = float(rate["price_total"])
+            except (TypeError, ValueError):
+                continue
+            room_name = room_names.get(str(rate.get("room_id")), "Unbekanntes Zimmer")
+            offer_name = offer_names.get(str(rate.get("offer_id")))
+            display_room = room_name
+            if offer_name and offer_name.lower() != "tagespreis":
+                display_room = f"{room_name} – {offer_name}"
+            test_window = {
+                "price": total_stay_price / min_nights,
+                "total_price": total_stay_price,
+                "start": start.isoformat(),
+                "nights": min_nights,
+                "room": display_room,
+                "board_type": board_label,
+            }
+            if best is None or test_window["total_price"] < best["total_price"]:
+                best = test_window
     return best
 
 

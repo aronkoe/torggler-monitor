@@ -35,6 +35,7 @@ jobs:
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
           ALARM_THRESHOLD_EUR: ${{ secrets.ALARM_THRESHOLD_EUR }}
+          SCRAPER_PROXY_URL: ${{ secrets.SCRAPER_PROXY_URL }}
           BOARD_TYPE: half_board
           MIN_NIGHTS: 2
           LOOKAHEAD_DAYS: 30

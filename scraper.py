@@ -57,6 +57,7 @@ def load_config():
         "MAX_NIGHTS",
         "LOOKAHEAD_DAYS",
         "ALARM_THRESHOLD_EUR",
+        "SCRAPER_PROXY_URL",
     ]
     for key in env_keys:
         value = os.getenv(key)
@@ -78,10 +79,17 @@ DEFAULT_HEADERS = {
 }
 
 
+def get_proxy_url():
+    return os.getenv("SCRAPER_PROXY_URL", "").strip() or None
+
+
 def fetch_json(url: str):
     # Tier 1: Try requests.Session with session initialization on target website
     try:
         session = requests.Session()
+        proxy_url = get_proxy_url()
+        if proxy_url:
+            session.proxies.update({"http": proxy_url, "https": proxy_url})
         session_headers = {
             "User-Agent": DEFAULT_HEADERS["User-Agent"],
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -103,7 +111,14 @@ def fetch_json(url: str):
     # Tier 2: Try urllib
     req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
+        proxy_url = get_proxy_url()
+        if proxy_url:
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+            )
+        else:
+            opener = urllib.request.build_opener()
+        with opener.open(req, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as exc:
         print(f"Urllib fetch failed ({exc}), trying Playwright expect_response...")
@@ -111,14 +126,18 @@ def fetch_json(url: str):
     # Tier 3: Try Playwright expect_response on site booking page
     browser_error = None
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            headless=True,
-            args=[
+        launch_options = {
+            "headless": True,
+            "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
             ],
-        )
+        }
+        proxy_url = get_proxy_url()
+        if proxy_url:
+            launch_options["proxy"] = {"server": proxy_url}
+        browser = playwright.chromium.launch(**launch_options)
         context = browser.new_context(
             locale="de-DE",
             user_agent=DEFAULT_HEADERS["User-Agent"],
@@ -203,6 +222,8 @@ def run_scan(cfg):
 def main():
     try:
         cfg = load_config()
+        if not get_proxy_url():
+            print("SCRAPER_PROXY_URL is not set; GitHub Actions may receive HTTP 403 from the booking API")
         init_db()
         best = run_scan(cfg)
         if not best:

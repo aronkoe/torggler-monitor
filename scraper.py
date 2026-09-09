@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import urllib.request
 from datetime import date, timedelta
 
@@ -83,8 +84,9 @@ def get_proxy_url():
     return os.getenv("SCRAPER_PROXY_URL", "").strip() or None
 
 
-def fetch_json(url: str, browser_fallback: bool = True):
+def fetch_json(url: str, browser_fallback: bool = True, retries: int = 3):
     # Tier 1: Try requests.Session with session initialization on target website
+    response_status = None
     try:
         session = requests.Session()
         proxy_url = get_proxy_url()
@@ -95,18 +97,25 @@ def fetch_json(url: str, browser_fallback: bool = True):
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": DEFAULT_HEADERS["Accept-Language"],
         }
-        # Visit online-buchung page to establish session & cookies
         session.get("https://www.farmhouse-torgglerhof.com/de/online-buchung/", headers=session_headers, timeout=10)
-        
-        # Query API with full headers & session cookies
         api_headers = DEFAULT_HEADERS.copy()
         api_headers["Referer"] = "https://www.farmhouse-torgglerhof.com/de/online-buchung/"
-        resp = session.get(url, headers=api_headers, timeout=15)
-        if resp.status_code < 400:
-            return resp.json()
-        print(f"Requests Session fetch returned status {resp.status_code}, trying urllib...")
+        for attempt in range(retries):
+            response = session.get(url, headers=api_headers, timeout=20)
+            response_status = response.status_code
+            if response.status_code < 400:
+                return response.json()
+            if response.status_code != 429:
+                print(f"Requests Session fetch returned status {response.status_code}, trying urllib...")
+                break
+            delay = 5.0 * (2 ** attempt)
+            print(f"Booking API rate limited (429); retrying in {delay:.0f}s")
+            time.sleep(delay)
     except Exception as exc:
         print(f"Requests Session fetch failed ({exc}), trying urllib...")
+
+    if response_status == 429:
+        raise RuntimeError(f"Booking API rate limit persisted for {url}")
 
     # Tier 2: Try urllib
     req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
@@ -184,6 +193,7 @@ def find_best_date_window(cfg):
     }
 
     best = None
+    request_delay = float(cfg.get("SCRAPER_REQUEST_DELAY", 1.5))
     for offset in range(lookahead_days):
         start = date.today() + timedelta(days=offset)
         end = start + timedelta(days=min_nights)
@@ -193,6 +203,8 @@ def find_best_date_window(cfg):
             f"&lang=de&maxAdults=4&maxChildren=3&sourceId={SOURCE_ID}"
         )
         try:
+            if offset:
+                time.sleep(request_delay)
             offers = fetch_json(OFFERS_URL + query, browser_fallback=False)
         except RuntimeError as exc:
             print(f"Offer fetch failed for {start}: {exc}")

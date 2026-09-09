@@ -39,6 +39,7 @@ jobs:
           BOARD_TYPE: half_board
           MIN_NIGHTS: 1
           LOOKAHEAD_DAYS: 365
+          SCRAPER_REQUEST_DELAY: 1.5
         run: |
           python scraper.py
       - name: Commit DB if changed

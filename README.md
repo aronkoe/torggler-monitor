@@ -52,7 +52,7 @@ Use this stack:
    - `TO_EMAIL`
    - `ALARM_THRESHOLD_EUR`
    - `BOARD_TYPE=half_board`
-   - `MIN_NIGHTS=2`
+   - `MIN_NIGHTS=1`
    - `LOOKAHEAD_DAYS=30`
 
 ### Email alerts

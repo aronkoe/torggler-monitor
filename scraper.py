@@ -167,15 +167,18 @@ def fetch_json(url: str, browser_fallback: bool = True):
 
 
 def find_best_date_window(cfg):
-    min_nights = int(cfg.get("MIN_NIGHTS", 2))
+    min_nights = int(cfg.get("MIN_NIGHTS", 1))
     lookahead_days = int(cfg.get("LOOKAHEAD_DAYS", 30))
     board_type = str(cfg.get("BOARD_TYPE", "half_board")).lower()
     board_label = "Halbpension" if board_type in {"half_board", "halbpension", "hp"} else board_type
     service_id = 3 if board_type in {"half_board", "halbpension", "hp"} else 2
 
     rooms = fetch_json(ROOMS_URL)
-    room_names = {
-        str(room.get("room_id")): room.get("title") or "Unbekanntes Zimmer"
+    room_details = {
+        str(room.get("room_id")): {
+            "name": room.get("title") or "Unbekanntes Zimmer",
+            "code": room.get("room_code") or "-",
+        }
         for room in rooms
         if isinstance(room, dict) and room.get("room_id") is not None
     }
@@ -207,7 +210,11 @@ def find_best_date_window(cfg):
                 total_stay_price = float(rate["price_total"])
             except (TypeError, ValueError):
                 continue
-            room_name = room_names.get(str(rate.get("room_id")), "Unbekanntes Zimmer")
+            room = room_details.get(
+                str(rate.get("room_id")),
+                {"name": "Unbekanntes Zimmer", "code": "-"},
+            )
+            room_name = room["name"]
             offer_name = offer_names.get(str(rate.get("offer_id")))
             display_room = room_name
             if offer_name and offer_name.lower() != "tagespreis":
@@ -218,6 +225,7 @@ def find_best_date_window(cfg):
                 "start": start.isoformat(),
                 "nights": min_nights,
                 "room": display_room,
+                "room_code": room["code"],
                 "board_type": board_label,
             }
             if best is None or test_window["total_price"] < best["total_price"]:

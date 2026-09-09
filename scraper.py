@@ -16,6 +16,7 @@ PROPERTY_ID = 11806
 SOURCE_ID = 98
 ROOMS_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/rooms?lang=de&sourceId={SOURCE_ID}"
 OFFERS_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/offers"
+AVAILABILITIES_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/availabilities"
 
 
 def load_dotenv_if_exists(path: str = ".env"):
@@ -112,6 +113,8 @@ def fetch_json(url: str, browser_fallback: bool = True, retries: int = 3):
             print(f"Booking API rate limited (429); retrying in {delay:.0f}s")
             time.sleep(delay)
     except Exception as exc:
+        if "402 Payment Required" in str(exc) or "ProxyError" in str(exc):
+            raise RuntimeError("SCRAPER_PROXY_URL is unavailable or out of bandwidth") from exc
         print(f"Requests Session fetch failed ({exc}), trying urllib...")
 
     if response_status == 429:
@@ -130,6 +133,8 @@ def fetch_json(url: str, browser_fallback: bool = True, retries: int = 3):
         with opener.open(req, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as exc:
+        if "402 Payment Required" in str(exc):
+            raise RuntimeError("SCRAPER_PROXY_URL is unavailable or out of bandwidth") from exc
         print(f"Urllib fetch failed ({exc}), trying Playwright expect_response...")
 
     if not browser_fallback:
@@ -192,10 +197,29 @@ def find_best_date_window(cfg):
         if isinstance(room, dict) and room.get("room_id") is not None
     }
 
+    availability_query = (
+        f"?from={date.today().isoformat()}"
+        f"&to={(date.today() + timedelta(days=lookahead_days)).isoformat()}"
+        f"&guests=%5B%5B18%2C18%5D%5D&sourceId={SOURCE_ID}"
+    )
+    availability = fetch_json(AVAILABILITIES_URL + availability_query, browser_fallback=False)
+    available_starts = {
+        date.fromisoformat(item["date"])
+        for item in availability
+        if item.get("date")
+        and any(
+            departure.get("departure") == date.fromisoformat(item["date"]).isoformat()
+            or departure.get("departure") == (date.fromisoformat(item["date"]) + timedelta(days=min_nights)).isoformat()
+            for departure in item.get("departures", [])
+        )
+    }
+
     best = None
     request_delay = float(cfg.get("SCRAPER_REQUEST_DELAY", 1.5))
     for offset in range(lookahead_days):
         start = date.today() + timedelta(days=offset)
+        if start not in available_starts:
+            continue
         end = start + timedelta(days=min_nights)
         query = (
             f"?correlationId=torggler-monitor&from={start.isoformat()}"
@@ -207,6 +231,8 @@ def find_best_date_window(cfg):
                 time.sleep(request_delay)
             offers = fetch_json(OFFERS_URL + query, browser_fallback=False)
         except RuntimeError as exc:
+            if "SCRAPER_PROXY_URL is unavailable" in str(exc):
+                raise
             print(f"Offer fetch failed for {start}: {exc}")
             continue
 

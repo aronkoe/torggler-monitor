@@ -30,8 +30,30 @@ def save_scan(price: float, start_date: str, nights: int, room: str, path: Optio
     conn = sqlite3.connect(p)
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO scans (ts, price, start_date, nights, room) VALUES (?, ?, ?, ?, ?)",
-        (datetime.utcnow().isoformat(), price, start_date, nights, room),
+        """
+        INSERT INTO scans (ts, price, start_date, nights, room)
+        SELECT ?, ?, ?, ?, ?
+        WHERE NOT EXISTS (
+            SELECT 1 FROM scans
+            WHERE substr(ts, 1, 10) = substr(?, 1, 10)
+              AND price = ?
+              AND start_date = ?
+              AND nights = ?
+              AND room = ?
+        )
+        """,
+        (
+            datetime.utcnow().isoformat(),
+            price,
+            start_date,
+            nights,
+            room,
+            datetime.utcnow().isoformat(),
+            price,
+            start_date,
+            nights,
+            room,
+        ),
     )
     conn.commit()
     conn.close()

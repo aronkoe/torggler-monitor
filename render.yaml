@@ -13,4 +13,4 @@ services:
       - key: MIN_NIGHTS
         value: '2'
       - key: LOOKAHEAD_DAYS
-        value: '30'
+        value: '365'

@@ -38,7 +38,7 @@ jobs:
           SCRAPER_PROXY_URL: ${{ secrets.SCRAPER_PROXY_URL }}
           BOARD_TYPE: half_board
           MIN_NIGHTS: 1
-          LOOKAHEAD_DAYS: 30
+          LOOKAHEAD_DAYS: 365
         run: |
           python scraper.py
       - name: Commit DB if changed

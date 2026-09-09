@@ -168,7 +168,7 @@ def fetch_json(url: str, browser_fallback: bool = True):
 
 def find_best_date_window(cfg):
     min_nights = int(cfg.get("MIN_NIGHTS", 1))
-    lookahead_days = int(cfg.get("LOOKAHEAD_DAYS", 30))
+    lookahead_days = int(cfg.get("LOOKAHEAD_DAYS", 365))
     board_type = str(cfg.get("BOARD_TYPE", "half_board")).lower()
     board_label = "Halbpension" if board_type in {"half_board", "halbpension", "hp"} else board_type
     service_id = 3 if board_type in {"half_board", "halbpension", "hp"} else 2

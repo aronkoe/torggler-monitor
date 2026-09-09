@@ -53,7 +53,7 @@ Use this stack:
    - `ALARM_THRESHOLD_EUR`
    - `BOARD_TYPE=half_board`
    - `MIN_NIGHTS=1`
-   - `LOOKAHEAD_DAYS=30`
+   - `LOOKAHEAD_DAYS=365`
 
 ### Email alerts
 1. Create a Google App Password for the Gmail account.

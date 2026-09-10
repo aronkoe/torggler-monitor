@@ -158,7 +158,7 @@
           const total = s.nights * s.price;
           const updatedDate = s.ts ? new Date(s.ts) : null;
           const updatedAt = updatedDate ? updatedDate.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) : 'unbekannt';
-          const isStale = !updatedDate || Date.now() - updatedDate.getTime() > 24 * 60 * 60 * 1000;
+          const isStale = !updatedDate || Date.now() - updatedDate.getTime() > 28 * 60 * 60 * 1000;
           const status = document.getElementById('status');
           status.textContent = isStale ? 'Veraltete Daten' : 'Aktualisiert';
           status.classList.toggle('stale', isStale);

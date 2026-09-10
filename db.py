@@ -29,32 +29,29 @@ def save_scan(price: float, start_date: str, nights: int, room: str, path: Optio
     p = path or DB_PATH
     conn = sqlite3.connect(p)
     cur = conn.cursor()
+    now_iso = datetime.utcnow().isoformat()
+    today_prefix = now_iso[:10]
+
     cur.execute(
         """
-        INSERT INTO scans (ts, price, start_date, nights, room)
-        SELECT ?, ?, ?, ?, ?
-        WHERE NOT EXISTS (
-            SELECT 1 FROM scans
-            WHERE substr(ts, 1, 10) = substr(?, 1, 10)
-              AND price = ?
-              AND start_date = ?
-              AND nights = ?
-              AND room = ?
-        )
+        SELECT id FROM scans
+        WHERE substr(ts, 1, 10) = ?
+          AND price = ?
+          AND start_date = ?
+          AND nights = ?
+          AND room = ?
+        ORDER BY id DESC LIMIT 1
         """,
-        (
-            datetime.utcnow().isoformat(),
-            price,
-            start_date,
-            nights,
-            room,
-            datetime.utcnow().isoformat(),
-            price,
-            start_date,
-            nights,
-            room,
-        ),
+        (today_prefix, price, start_date, nights, room),
     )
+    row = cur.fetchone()
+    if row:
+        cur.execute("UPDATE scans SET ts = ? WHERE id = ?", (now_iso, row[0]))
+    else:
+        cur.execute(
+            "INSERT INTO scans (ts, price, start_date, nights, room) VALUES (?, ?, ?, ?, ?)",
+            (now_iso, price, start_date, nights, room),
+        )
     conn.commit()
     conn.close()
 

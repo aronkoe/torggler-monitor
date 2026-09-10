@@ -197,12 +197,26 @@ def find_best_date_window(cfg):
         if isinstance(room, dict) and room.get("room_id") is not None
     }
 
-    availability_query = (
-        f"?from={date.today().isoformat()}"
-        f"&to={(date.today() + timedelta(days=lookahead_days)).isoformat()}"
-        f"&guests=%5B%5B18%2C18%5D%5D&sourceId={SOURCE_ID}"
-    )
-    availability = fetch_json(AVAILABILITIES_URL + availability_query, browser_fallback=False)
+    availability = []
+    chunk_size = 60
+    today = date.today()
+    for offset in range(0, lookahead_days, chunk_size):
+        chunk_from = today + timedelta(days=offset)
+        chunk_to = today + timedelta(days=min(offset + chunk_size, lookahead_days))
+        if chunk_from >= chunk_to:
+            break
+        chunk_query = (
+            f"?from={chunk_from.isoformat()}"
+            f"&to={chunk_to.isoformat()}"
+            f"&guests=%5B%5B18%2C18%5D%5D&sourceId={SOURCE_ID}"
+        )
+        try:
+            chunk_data = fetch_json(AVAILABILITIES_URL + chunk_query, browser_fallback=False)
+            if isinstance(chunk_data, list):
+                availability.extend(chunk_data)
+        except Exception as exc:
+            print(f"Availabilities chunk fetch failed for {chunk_from} to {chunk_to}: {exc}")
+
     available_starts = {
         date.fromisoformat(item["date"])
         for item in availability
@@ -215,7 +229,7 @@ def find_best_date_window(cfg):
     }
 
     best = None
-    request_delay = float(cfg.get("SCRAPER_REQUEST_DELAY", 1.5))
+    request_delay = float(cfg.get("SCRAPER_REQUEST_DELAY", 0.5))
     for offset in range(lookahead_days):
         start = date.today() + timedelta(days=offset)
         if start not in available_starts:
@@ -268,6 +282,36 @@ def find_best_date_window(cfg):
             }
             if best is None or test_window["total_price"] < best["total_price"]:
                 best = test_window
+
+    if best is None:
+        # Fallback to cheapest room base price from ROOMS_URL
+        cheapest_base = None
+        for room in rooms:
+            if not isinstance(room, dict):
+                continue
+            price = room.get("price_from")
+            if price is None:
+                continue
+            try:
+                val = float(price)
+            except (TypeError, ValueError):
+                continue
+            if cheapest_base is None or val < cheapest_base["price"]:
+                cheapest_base = {
+                    "price": val,
+                    "room": room.get("title") or "Unbekanntes Zimmer",
+                    "room_code": room.get("room_code") or "-",
+                }
+        if cheapest_base:
+            best = {
+                "price": cheapest_base["price"],
+                "total_price": cheapest_base["price"] * min_nights,
+                "start": today.isoformat(),
+                "nights": min_nights,
+                "room": cheapest_base["room"],
+                "room_code": cheapest_base["room_code"],
+                "board_type": board_label,
+            }
     return best
 
 

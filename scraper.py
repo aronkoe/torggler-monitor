@@ -138,7 +138,7 @@ def fetch_json(url: str, browser_fallback: bool = True, retries: int = 3):
         with opener.open(req, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as exc:
-        if "402 Payment Required" in str(exc):
+        if any(marker in str(exc) for marker in ("402 Payment Required", "ProxyError", "Tunnel connection failed")):
             raise TemporaryAccessError("SCRAPER_PROXY_URL is unavailable or out of bandwidth") from exc
         print(f"Urllib fetch failed ({exc}), trying Playwright expect_response...")
 
@@ -185,7 +185,7 @@ def fetch_json(url: str, browser_fallback: bool = True, retries: int = 3):
     browser_error_message = str(browser_error or "").lower()
     is_temporary_browser_error = isinstance(browser_error, PlaywrightTimeoutError) or any(
         marker in browser_error_message
-        for marker in ("timed out", "net::", "403", "429", "502", "503", "504")
+        for marker in ("timed out", "net::", "429", "502", "503", "504")
     )
     if is_temporary_browser_error:
         raise TemporaryAccessError(f"Could not fetch booking API: {browser_error}") from browser_error

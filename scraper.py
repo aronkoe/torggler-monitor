@@ -319,6 +319,18 @@ def run_scan(cfg):
     return find_best_date_window(cfg)
 
 
+def is_temporary_access_error(exc: Exception) -> bool:
+    message = str(exc)
+    return any(
+        marker in message
+        for marker in (
+            "SCRAPER_PROXY_URL is unavailable or out of bandwidth",
+            "Could not fetch booking API",
+            "Booking API rate limit persisted",
+        )
+    )
+
+
 def main():
     try:
         cfg = load_config()
@@ -354,6 +366,9 @@ def main():
             except Exception as exc:
                 print("Alert error:", exc)
     except Exception as exc:
+        if is_temporary_access_error(exc):
+            print(f"Skipping run because booking API is temporarily unavailable: {exc}")
+            return
         import traceback
         import sys
         print(f"Scraper execution failed: {exc}")

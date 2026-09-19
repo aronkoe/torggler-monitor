@@ -162,10 +162,14 @@
           const status = document.getElementById('status');
           status.textContent = isStale ? 'Veraltete Daten' : 'Aktualisiert';
           status.classList.toggle('stale', isStale);
+          const checkIn = new Date(s.start_date);
+          const checkOut = new Date(checkIn);
+          checkOut.setDate(checkOut.getDate() + s.nights);
+          const fmtDate = d => d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
           document.getElementById('current').innerHTML = `
             <div class="current-price"><span>${formatMoney(s.price)}</span> / Nacht inkl. Halbpension</div>
             <div class="meta">
-              <strong>${s.start_date}</strong> – ${s.nights} Nächte<br>
+              <strong>${fmtDate(checkIn)} – ${fmtDate(checkOut)}</strong> (${s.nights} Nächte)<br>
               Gesamt: <strong>${formatMoney(total)}</strong><br>
               Zimmer: <em>${s.room}</em>
             </div>

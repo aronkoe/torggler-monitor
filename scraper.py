@@ -331,9 +331,10 @@ def main():
             import sys
             sys.exit(1)
 
+        checkout = (date.fromisoformat(best["start"]) + timedelta(days=best["nights"])).isoformat()
         print(
             f"Best: €{best['price']} pro Nacht inkl. {best['board_type']} "
-            f"ab {best['start']} für {best['nights']} Nächte "
+            f"von {best['start']} bis {checkout} ({best['nights']} Nächte) "
             f"(gesamt: €{best['total_price']}; {best['room']} / {best['room_code']})"
         )
         save_scan(best["price"], best["start"], best["nights"], best["room"])
@@ -346,7 +347,7 @@ def main():
                     subject = f"Preisalarm: €{best['price']}/Nacht inkl. {best['board_type']}"
                     content = (
                         f"Gefunden: €{best['price']} pro Nacht inkl. {best['board_type']} "
-                        f"ab {best['start']} für {best['nights']} Nächte "
+                        f"von {best['start']} bis {checkout} ({best['nights']} Nächte) "
                         f"(gesamt: €{best['total_price']}; {best['room']} / {best['room_code']})"
                     )
                     send_email(subject, content, cfg)

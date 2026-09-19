@@ -6,6 +6,7 @@ from datetime import date, timedelta
 
 import requests
 import yaml
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 from db import init_db, save_scan
@@ -142,7 +143,7 @@ def fetch_json(url: str, browser_fallback: bool = True, retries: int = 3):
         print(f"Urllib fetch failed ({exc}), trying Playwright expect_response...")
 
     if not browser_fallback:
-        raise TemporaryAccessError(f"Could not fetch booking API URL: {url}")
+        raise RuntimeError(f"Could not fetch booking API URL: {url}")
 
     # Tier 3: Try Playwright expect_response on site booking page
     browser_error = None
@@ -181,7 +182,14 @@ def fetch_json(url: str, browser_fallback: bool = True, retries: int = 3):
         finally:
             browser.close()
 
-    raise TemporaryAccessError(f"Could not fetch booking API: {browser_error}") from browser_error
+    browser_error_message = str(browser_error or "").lower()
+    is_temporary_browser_error = isinstance(browser_error, PlaywrightTimeoutError) or any(
+        marker in browser_error_message
+        for marker in ("timed out", "net::", "403", "429", "502", "503", "504")
+    )
+    if is_temporary_browser_error:
+        raise TemporaryAccessError(f"Could not fetch booking API: {browser_error}") from browser_error
+    raise RuntimeError(f"Could not fetch booking API: {browser_error}") from browser_error
 
 
 def find_best_date_window(cfg):

@@ -6,6 +6,7 @@ from datetime import date, timedelta
 
 import requests
 import yaml
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 from db import init_db, save_scan
@@ -17,6 +18,10 @@ SOURCE_ID = 98
 ROOMS_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/rooms?lang=de&sourceId={SOURCE_ID}"
 OFFERS_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/offers"
 AVAILABILITIES_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/availabilities"
+
+
+class TemporaryAccessError(RuntimeError):
+    """Transient upstream access error that should not fail the scheduled job."""
 
 
 def load_dotenv_if_exists(path: str = ".env"):
@@ -114,11 +119,11 @@ def fetch_json(url: str, browser_fallback: bool = True, retries: int = 3):
             time.sleep(delay)
     except Exception as exc:
         if "402 Payment Required" in str(exc) or "ProxyError" in str(exc):
-            raise RuntimeError("SCRAPER_PROXY_URL is unavailable or out of bandwidth") from exc
+            raise TemporaryAccessError("SCRAPER_PROXY_URL is unavailable or out of bandwidth") from exc
         print(f"Requests Session fetch failed ({exc}), trying urllib...")
 
     if response_status == 429:
-        raise RuntimeError(f"Booking API rate limit persisted for {url}")
+        raise TemporaryAccessError(f"Booking API rate limit persisted for {url}")
 
     # Tier 2: Try urllib
     req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
@@ -133,8 +138,8 @@ def fetch_json(url: str, browser_fallback: bool = True, retries: int = 3):
         with opener.open(req, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as exc:
-        if "402 Payment Required" in str(exc):
-            raise RuntimeError("SCRAPER_PROXY_URL is unavailable or out of bandwidth") from exc
+        if any(marker in str(exc) for marker in ("402 Payment Required", "ProxyError", "Tunnel connection failed")):
+            raise TemporaryAccessError("SCRAPER_PROXY_URL is unavailable or out of bandwidth") from exc
         print(f"Urllib fetch failed ({exc}), trying Playwright expect_response...")
 
     if not browser_fallback:
@@ -177,6 +182,13 @@ def fetch_json(url: str, browser_fallback: bool = True, retries: int = 3):
         finally:
             browser.close()
 
+    browser_error_message = str(browser_error or "").lower()
+    is_temporary_browser_error = isinstance(browser_error, PlaywrightTimeoutError) or any(
+        marker in browser_error_message
+        for marker in ("timed out", "net::", "429", "502", "503", "504")
+    )
+    if is_temporary_browser_error:
+        raise TemporaryAccessError(f"Could not fetch booking API: {browser_error}") from browser_error
     raise RuntimeError(f"Could not fetch booking API: {browser_error}") from browser_error
 
 
@@ -319,6 +331,10 @@ def run_scan(cfg):
     return find_best_date_window(cfg)
 
 
+def is_temporary_access_error(exc: Exception) -> bool:
+    return isinstance(exc, TemporaryAccessError)
+
+
 def main():
     try:
         cfg = load_config()
@@ -354,6 +370,9 @@ def main():
             except Exception as exc:
                 print("Alert error:", exc)
     except Exception as exc:
+        if is_temporary_access_error(exc):
+            print(f"Skipping run because booking API is temporarily unavailable: {exc}")
+            return
         import traceback
         import sys
         print(f"Scraper execution failed: {exc}")

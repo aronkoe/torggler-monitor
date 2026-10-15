@@ -198,14 +198,17 @@
           const checkOut = dateAfter(checkIn, s.nights);
           const fmtDate = d => d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
           const followingNightDate = dateAfter(checkIn, 1);
-          const renderStayOption = (label, price, nights, offer) => `
+          const renderStayOption = (label, price, nights, offer, room) => `
             <div class="stay-option">
               <div class="stay-option-label">${label}</div>
-              <div class="stay-option-price">${price == null ? 'Kein Preis gefunden' : `${formatMoney(price)}${nights === 1 ? ' / Nacht' : ' gesamt'}`}</div>
+                  <div class="stay-option-price">${price == null ? 'Kein passendes Angebot' : `${formatMoney(price)}${nights === 1 ? ' / Nacht' : ' gesamt'}`}</div>
               ${price != null && nights > 1 ? `<div class="stay-option-note">${formatMoney(price / nights)} durchschnittlich / Nacht</div>` : ''}
+                  ${room ? `<div class="stay-option-note">${escapeHtml(room)}</div>` : ''}
               ${offer ? `<div class="stay-option-note">${escapeHtml(offer)}</div>` : ''}
             </div>
           `;
+              const twoNightStart = s.two_night_start ? new Date(s.two_night_start) : null;
+              const threeNightStart = s.three_night_start ? new Date(s.three_night_start) : null;
           document.getElementById('current').innerHTML = `
             <div class="current-price"><span>${formatMoney(s.price)}</span> / Nacht inkl. Halbpension</div>
             <div class="meta">
@@ -214,9 +217,9 @@
               Zimmer: <em>${escapeHtml(s.room)}</em>
             </div>
             <div class="stay-options">
-              ${renderStayOption(`Folgenacht separat (${fmtDate(followingNightDate)})`, s.following_night_price, 1, s.following_night_offer)}
-              ${renderStayOption(`2 Nächte durchgehend (${fmtDate(checkIn)} – ${fmtDate(dateAfter(checkIn, 2))})`, s.two_night_total, 2, s.two_night_offer)}
-              ${renderStayOption(`3 Nächte durchgehend (${fmtDate(checkIn)} – ${fmtDate(dateAfter(checkIn, 3))})`, s.three_night_total, 3, s.three_night_offer)}
+              ${renderStayOption(`Folgenacht separat (${fmtDate(followingNightDate)})`, s.following_night_price, 1, s.following_night_offer, s.room)}
+              ${renderStayOption(twoNightStart ? `Günstigste 2 Nächte (${fmtDate(twoNightStart)} – ${fmtDate(dateAfter(twoNightStart, 2))})` : 'Günstigste 2 Nächte im Zeitraum', s.two_night_total, 2, s.two_night_offer, s.two_night_room)}
+              ${renderStayOption(threeNightStart ? `Günstigste 3 Nächte (${fmtDate(threeNightStart)} – ${fmtDate(dateAfter(threeNightStart, 3))})` : 'Günstigste 3 Nächte im Zeitraum', s.three_night_total, 3, s.three_night_offer, s.three_night_room)}
             </div>
             <div class="last-update">Letztes Update: ${updatedAt}</div>
           `;

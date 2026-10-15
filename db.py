@@ -8,8 +8,12 @@ OPTIONAL_SCAN_COLUMNS = {
     "following_night_offer": "TEXT",
     "two_night_total": "REAL",
     "two_night_offer": "TEXT",
+    "two_night_start": "TEXT",
+    "two_night_room": "TEXT",
     "three_night_total": "REAL",
     "three_night_offer": "TEXT",
+    "three_night_start": "TEXT",
+    "three_night_room": "TEXT",
 }
 
 
@@ -30,8 +34,12 @@ def init_db(path: Optional[str] = None):
             following_night_offer TEXT,
             two_night_total REAL,
             two_night_offer TEXT,
+            two_night_start TEXT,
+            two_night_room TEXT,
             three_night_total REAL,
-            three_night_offer TEXT
+            three_night_offer TEXT,
+            three_night_start TEXT,
+            three_night_room TEXT
         )
         """
     )
@@ -54,8 +62,12 @@ def save_scan(
     following_night_offer: Optional[str] = None,
     two_night_total: Optional[float] = None,
     two_night_offer: Optional[str] = None,
+    two_night_start: Optional[str] = None,
+    two_night_room: Optional[str] = None,
     three_night_total: Optional[float] = None,
     three_night_offer: Optional[str] = None,
+    three_night_start: Optional[str] = None,
+    three_night_room: Optional[str] = None,
 ):
     p = path or DB_PATH
     conn = sqlite3.connect(p)
@@ -81,8 +93,9 @@ def save_scan(
             """
             UPDATE scans
             SET ts = ?, following_night_price = ?, following_night_offer = ?,
-                two_night_total = ?, two_night_offer = ?,
-                three_night_total = ?, three_night_offer = ?
+                two_night_total = ?, two_night_offer = ?, two_night_start = ?,
+                two_night_room = ?, three_night_total = ?, three_night_offer = ?,
+                three_night_start = ?, three_night_room = ?
             WHERE id = ?
             """,
             (
@@ -91,8 +104,12 @@ def save_scan(
                 following_night_offer,
                 two_night_total,
                 two_night_offer,
+                two_night_start,
+                two_night_room,
                 three_night_total,
                 three_night_offer,
+                three_night_start,
+                three_night_room,
                 row[0],
             ),
         )
@@ -102,9 +119,9 @@ def save_scan(
             INSERT INTO scans (
                 ts, price, start_date, nights, room,
                 following_night_price, following_night_offer,
-                two_night_total, two_night_offer,
-                three_night_total, three_night_offer
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                two_night_total, two_night_offer, two_night_start, two_night_room,
+                three_night_total, three_night_offer, three_night_start, three_night_room
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 now_iso,
@@ -116,8 +133,12 @@ def save_scan(
                 following_night_offer,
                 two_night_total,
                 two_night_offer,
+                two_night_start,
+                two_night_room,
                 three_night_total,
                 three_night_offer,
+                three_night_start,
+                three_night_room,
             ),
         )
     conn.commit()
@@ -132,8 +153,8 @@ def latest_scan(path: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         SELECT ts, price, start_date, nights, room,
                following_night_price, following_night_offer,
-               two_night_total, two_night_offer,
-               three_night_total, three_night_offer
+               two_night_total, two_night_offer, two_night_start, two_night_room,
+               three_night_total, three_night_offer, three_night_start, three_night_room
         FROM scans ORDER BY id DESC LIMIT 1
         """
     )
@@ -151,8 +172,12 @@ def latest_scan(path: Optional[str] = None) -> Optional[Dict[str, Any]]:
         "following_night_offer": row[6],
         "two_night_total": row[7],
         "two_night_offer": row[8],
-        "three_night_total": row[9],
-        "three_night_offer": row[10],
+        "two_night_start": row[9],
+        "two_night_room": row[10],
+        "three_night_total": row[11],
+        "three_night_offer": row[12],
+        "three_night_start": row[13],
+        "three_night_room": row[14],
     }
 
 

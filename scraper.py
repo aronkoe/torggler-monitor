@@ -17,6 +17,7 @@ SOURCE_ID = 98
 ROOMS_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/rooms?lang=de&sourceId={SOURCE_ID}"
 OFFERS_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/offers"
 AVAILABILITIES_URL = f"https://api.widgets.bookingsuedtirol.com/v6/properties/{PROPERTY_ID}/availabilities"
+MAX_QUOTE_NIGHTS = 3
 
 
 def load_dotenv_if_exists(path: str = ".env"):
@@ -200,9 +201,11 @@ def find_best_date_window(cfg):
     availability = []
     chunk_size = 60
     today = date.today()
-    for offset in range(0, lookahead_days, chunk_size):
+    max_stay_nights = max(min_nights, MAX_QUOTE_NIGHTS)
+    chunk_step = max(1, chunk_size - min(max_stay_nights, chunk_size - 1))
+    for offset in range(0, lookahead_days, chunk_step):
         chunk_from = today + timedelta(days=offset)
-        chunk_to = today + timedelta(days=min(offset + chunk_size, lookahead_days))
+        chunk_to = chunk_from + timedelta(days=chunk_size)
         if chunk_from >= chunk_to:
             break
         chunk_query = (
@@ -217,16 +220,19 @@ def find_best_date_window(cfg):
         except Exception as exc:
             print(f"Availabilities chunk fetch failed for {chunk_from} to {chunk_to}: {exc}")
 
-    available_starts = {
-        date.fromisoformat(item["date"])
-        for item in availability
-        if item.get("date")
-        and any(
-            departure.get("departure") == date.fromisoformat(item["date"]).isoformat()
-            or departure.get("departure") == (date.fromisoformat(item["date"]) + timedelta(days=min_nights)).isoformat()
-            for departure in item.get("departures", [])
-        )
-    }
+    available_starts = set()
+    available_nights_by_start = {}
+    for item in availability:
+        if not item.get("date"):
+            continue
+        start_date = date.fromisoformat(item["date"])
+        for departure in item.get("departures", []):
+            departure_date = date.fromisoformat(departure["departure"])
+            nights = (departure_date - start_date).days
+            if departure_date == start_date or nights == min_nights:
+                available_starts.add(start_date)
+            if 1 <= nights <= MAX_QUOTE_NIGHTS:
+                available_nights_by_start.setdefault(start_date, set()).add(nights)
 
     best = None
     request_delay = float(cfg.get("SCRAPER_REQUEST_DELAY", 0.5))
@@ -234,55 +240,26 @@ def find_best_date_window(cfg):
         start = date.today() + timedelta(days=offset)
         if start not in available_starts:
             continue
-        end = start + timedelta(days=min_nights)
-        query = (
-            f"?correlationId=torggler-monitor&from={start.isoformat()}"
-            f"&to={end.isoformat()}&guestCount=2&guests=%5B%5B18%2C18%5D%5D"
-            f"&lang=de&maxAdults=4&maxChildren=3&sourceId={SOURCE_ID}"
-        )
         try:
             if offset:
                 time.sleep(request_delay)
-            offers = fetch_json(OFFERS_URL + query, browser_fallback=False)
+            offers = fetch_json(build_offers_url(start, min_nights), browser_fallback=False)
         except RuntimeError as exc:
             if "SCRAPER_PROXY_URL is unavailable" in str(exc):
                 raise
             print(f"Offer fetch failed for {start}: {exc}")
             continue
 
-        offer_names = {
-            str(offer.get("offer_id")): offer.get("title")
-            for offer in offers.get("defaultOffers", [])
-            if isinstance(offer, dict) and offer.get("offer_id") is not None
-        }
-        for rate in offers.get("rates", []):
-            if rate.get("service") != service_id or rate.get("price_total") is None:
-                continue
-            try:
-                total_stay_price = float(rate["price_total"])
-            except (TypeError, ValueError):
-                continue
-            room = room_details.get(
-                str(rate.get("room_id")),
-                {"name": "Unbekanntes Zimmer", "code": "-"},
-            )
-            room_name = room["name"]
-            offer_name = offer_names.get(str(rate.get("offer_id")))
-            display_room = room_name
-            if offer_name and offer_name.lower() != "tagespreis":
-                display_room = f"{room_name} – {offer_name}"
-            test_window = {
-                "price": total_stay_price / min_nights,
-                "total_price": total_stay_price,
-                "start": start.isoformat(),
-                "nights": min_nights,
-                "room": display_room,
-                "room_code": room["code"],
-                "room_id": rate.get("room_id"),
-                "board_type": board_label,
-            }
-            if best is None or test_window["total_price"] < best["total_price"]:
-                best = test_window
+        test_window = select_best_stay(
+            offers,
+            service_id,
+            room_details,
+            start,
+            min_nights,
+            board_label,
+        )
+        if test_window and (best is None or test_window["total_price"] < best["total_price"]):
+            best = test_window
 
     if best is None:
         # Fallback to cheapest room base price from ROOMS_URL
@@ -314,54 +291,72 @@ def find_best_date_window(cfg):
                 "board_type": board_label,
             }
 
-    if best and best.get("room_id") is not None:
+    if best:
         best.update(
             {
                 "following_night_price": None,
                 "following_night_offer": None,
                 "two_night_total": None,
                 "two_night_offer": None,
+                "two_night_start": None,
+                "two_night_room": None,
                 "three_night_total": None,
                 "three_night_offer": None,
+                "three_night_start": None,
+                "three_night_room": None,
             }
         )
         start = date.fromisoformat(best["start"])
-        quote_requests = (
-            ("following_night", start + timedelta(days=1), 1),
-            ("two_night", start, 2),
-            ("three_night", start, 3),
-        )
-        for index, (quote_name, quote_start, nights) in enumerate(quote_requests):
-            if index:
-                time.sleep(request_delay)
+        if best.get("room_id") is not None:
             try:
+                time.sleep(request_delay)
                 quote = find_stay_quote(
-                    quote_start,
-                    nights,
+                    start + timedelta(days=1),
+                    1,
                     service_id,
+                    room_details,
+                    board_label,
                     best["room_id"],
                 )
-            except Exception as exc:
-                print(f"{quote_name} offer fetch failed for {quote_start}: {exc}")
-                continue
-            if quote:
-                if quote_name == "following_night":
+                if quote:
                     best["following_night_price"] = quote["total_price"]
                     best["following_night_offer"] = quote["offer_name"]
-                else:
-                    best[f"{quote_name}_total"] = quote["total_price"]
-                    best[f"{quote_name}_offer"] = quote["offer_name"]
+            except Exception as exc:
+                print(f"Following-night offer fetch failed for {start + timedelta(days=1)}: {exc}")
+
+        for nights in (2, 3):
+            if nights == min_nights and best.get("room_id") is not None:
+                quote = best
+            else:
+                quote = find_best_stay_for_nights(
+                    nights,
+                    today,
+                    lookahead_days,
+                    available_nights_by_start,
+                    service_id,
+                    room_details,
+                    board_label,
+                    request_delay,
+                )
+            if quote:
+                prefix = "two" if nights == 2 else "three"
+                best[f"{prefix}_night_total"] = quote["total_price"]
+                best[f"{prefix}_night_offer"] = quote["offer_name"]
+                best[f"{prefix}_night_start"] = quote["start"]
+                best[f"{prefix}_night_room"] = quote["room"]
     return best
 
 
-def find_stay_quote(start, nights, service_id, room_id):
+def build_offers_url(start, nights):
     end = start + timedelta(days=nights)
-    query = (
+    return OFFERS_URL + (
         f"?correlationId=torggler-monitor&from={start.isoformat()}"
         f"&to={end.isoformat()}&guestCount=2&guests=%5B%5B18%2C18%5D%5D"
         f"&lang=de&maxAdults=4&maxChildren=3&sourceId={SOURCE_ID}"
     )
-    offers = fetch_json(OFFERS_URL + query, browser_fallback=False)
+
+
+def select_best_stay(offers, service_id, room_details, start, nights, board_label, room_id=None):
     if not isinstance(offers, dict):
         return None
 
@@ -374,7 +369,7 @@ def find_stay_quote(start, nights, service_id, room_id):
     for rate in offers.get("rates", []):
         if (
             rate.get("service") != service_id
-            or str(rate.get("room_id")) != str(room_id)
+            or (room_id is not None and str(rate.get("room_id")) != str(room_id))
             or rate.get("price_total") is None
         ):
             continue
@@ -384,11 +379,70 @@ def find_stay_quote(start, nights, service_id, room_id):
             continue
         if best_quote is None or total_price < best_quote["total_price"]:
             offer_name = offer_names.get(str(rate.get("offer_id")))
+            room = room_details.get(
+                str(rate.get("room_id")),
+                {"name": "Unbekanntes Zimmer", "code": "-"},
+            )
+            display_room = room["name"]
+            if offer_name and offer_name.lower() != "tagespreis":
+                display_room = f"{display_room} – {offer_name}"
             best_quote = {
+                "price": total_price / nights,
                 "total_price": total_price,
+                "start": start.isoformat(),
+                "nights": nights,
+                "room": display_room,
+                "room_code": room["code"],
+                "room_id": rate.get("room_id"),
+                "board_type": board_label,
                 "offer_name": offer_name if offer_name and offer_name.lower() != "tagespreis" else None,
             }
     return best_quote
+
+
+def find_stay_quote(start, nights, service_id, room_details, board_label, room_id=None):
+    offers = fetch_json(build_offers_url(start, nights), browser_fallback=False)
+    return select_best_stay(
+        offers,
+        service_id,
+        room_details,
+        start,
+        nights,
+        board_label,
+        room_id,
+    )
+
+
+def find_best_stay_for_nights(
+    nights,
+    today,
+    lookahead_days,
+    available_nights_by_start,
+    service_id,
+    room_details,
+    board_label,
+    request_delay,
+):
+    best = None
+    requests_made = 0
+    for offset in range(lookahead_days):
+        start = today + timedelta(days=offset)
+        if nights not in available_nights_by_start.get(start, set()):
+            continue
+        time.sleep(request_delay)
+        requests_made += 1
+        try:
+            offers = fetch_json(build_offers_url(start, nights), browser_fallback=False)
+        except RuntimeError as exc:
+            if "SCRAPER_PROXY_URL is unavailable" in str(exc):
+                raise
+            print(f"{nights}-night offer fetch failed for {start}: {exc}")
+            continue
+        stay = select_best_stay(offers, service_id, room_details, start, nights, board_label)
+        if stay and (best is None or stay["total_price"] < best["total_price"]):
+            best = stay
+    print(f"{nights}-night search checked {requests_made} available arrival dates")
+    return best
 
 
 def run_scan(cfg):
@@ -422,8 +476,12 @@ def main():
             following_night_offer=best.get("following_night_offer"),
             two_night_total=best.get("two_night_total"),
             two_night_offer=best.get("two_night_offer"),
+            two_night_start=best.get("two_night_start"),
+            two_night_room=best.get("two_night_room"),
             three_night_total=best.get("three_night_total"),
             three_night_offer=best.get("three_night_offer"),
+            three_night_start=best.get("three_night_start"),
+            three_night_room=best.get("three_night_room"),
         )
 
         following_day = date.fromisoformat(best["start"]) + timedelta(days=1)
@@ -433,12 +491,18 @@ def main():
                 f"Following night: €{best['following_night_price']} pro Nacht ab {following_day}{offer_label}"
             )
         for nights in (2, 3):
-            total = best.get(f"{('two' if nights == 2 else 'three')}_night_total")
+            prefix = "two" if nights == 2 else "three"
+            total = best.get(f"{prefix}_night_total")
             if total is not None:
-                offer = best.get(f"{('two' if nights == 2 else 'three')}_night_offer")
+                stay_start = date.fromisoformat(best[f"{prefix}_night_start"])
+                stay_checkout = stay_start + timedelta(days=nights)
+                stay_room = best.get(f"{prefix}_night_room") or best["room"]
+                offer = best.get(f"{prefix}_night_offer")
                 offer_label = f" ({offer})" if offer else ""
-                checkout_date = date.fromisoformat(best["start"]) + timedelta(days=nights)
-                print(f"{nights}-night stay: €{total} total through {checkout_date}{offer_label}")
+                print(
+                    f"Best {nights}-night stay: €{total} total from {stay_start} "
+                    f"through {stay_checkout} ({stay_room}{offer_label})"
+                )
 
         threshold = cfg.get("ALARM_THRESHOLD_EUR")
         if threshold is not None and str(threshold).strip() != "":
@@ -451,10 +515,16 @@ def main():
                         f"von {best['start']} bis {checkout} ({best['nights']} Nächte) "
                         f"(gesamt: €{best['total_price']}; {best['room']} / {best['room_code']})"
                     )
-                    if best.get("two_night_total") is not None:
-                        content += f"<br>2 Nächte: €{best['two_night_total']} gesamt"
-                    if best.get("three_night_total") is not None:
-                        content += f"<br>3 Nächte: €{best['three_night_total']} gesamt"
+                    for nights, prefix in ((2, "two"), (3, "three")):
+                        stay_total = best.get(f"{prefix}_night_total")
+                        if stay_total is not None:
+                            stay_start = date.fromisoformat(best[f"{prefix}_night_start"])
+                            stay_checkout = stay_start + timedelta(days=nights)
+                            stay_room = best.get(f"{prefix}_night_room") or best["room"]
+                            content += (
+                                f"<br>{nights} Nächte: {stay_start} bis {stay_checkout}; "
+                                f"{stay_room}; gesamt €{stay_total}"
+                            )
                     send_email(subject, content, cfg)
                     print("Email sent")
             except Exception as exc:

@@ -218,8 +218,8 @@
             </div>
             <div class="stay-options">
               ${renderStayOption(`Folgenacht separat (${fmtDate(followingNightDate)})`, s.following_night_price, 1, s.following_night_offer, s.room)}
-              ${renderStayOption(twoNightStart ? `Günstigste 2 Nächte (${fmtDate(twoNightStart)} – ${fmtDate(dateAfter(twoNightStart, 2))})` : 'Günstigste 2 Nächte im Zeitraum', s.two_night_total, 2, s.two_night_offer, s.two_night_room)}
-              ${renderStayOption(threeNightStart ? `Günstigste 3 Nächte (${fmtDate(threeNightStart)} – ${fmtDate(dateAfter(threeNightStart, 3))})` : 'Günstigste 3 Nächte im Zeitraum', s.three_night_total, 3, s.three_night_offer, s.three_night_room)}
+              ${renderStayOption(twoNightStart ? `Günstigstes Wochenende: 2 Nächte (${fmtDate(twoNightStart)} – ${fmtDate(dateAfter(twoNightStart, 2))})` : 'Kein 2-Nächte-Wochenende gefunden', s.two_night_total, 2, s.two_night_offer, s.two_night_room)}
+              ${renderStayOption(threeNightStart ? `Verlängertes Wochenende: 3 Nächte (${fmtDate(threeNightStart)} – ${fmtDate(dateAfter(threeNightStart, 3))})` : 'Kein verlängertes Wochenende gefunden', s.three_night_total, 3, s.three_night_offer, s.three_night_room)}
             </div>
             <div class="last-update">Letztes Update: ${updatedAt}</div>
           `;

@@ -337,6 +337,7 @@ def find_best_date_window(cfg):
                     room_details,
                     board_label,
                     request_delay,
+                    {4, 5} if nights == 2 else {3, 4, 5},
                 )
             if quote:
                 prefix = "two" if nights == 2 else "three"
@@ -422,12 +423,16 @@ def find_best_stay_for_nights(
     room_details,
     board_label,
     request_delay,
+    arrival_weekdays,
 ):
     best = None
     requests_made = 0
     for offset in range(lookahead_days):
         start = today + timedelta(days=offset)
-        if nights not in available_nights_by_start.get(start, set()):
+        if (
+            start.weekday() not in arrival_weekdays
+            or nights not in available_nights_by_start.get(start, set())
+        ):
             continue
         time.sleep(request_delay)
         requests_made += 1

@@ -278,6 +278,7 @@ def find_best_date_window(cfg):
                 "nights": min_nights,
                 "room": display_room,
                 "room_code": room["code"],
+                "room_id": rate.get("room_id"),
                 "board_type": board_label,
             }
             if best is None or test_window["total_price"] < best["total_price"]:
@@ -312,7 +313,82 @@ def find_best_date_window(cfg):
                 "room_code": cheapest_base["room_code"],
                 "board_type": board_label,
             }
+
+    if best and best.get("room_id") is not None:
+        best.update(
+            {
+                "following_night_price": None,
+                "following_night_offer": None,
+                "two_night_total": None,
+                "two_night_offer": None,
+                "three_night_total": None,
+                "three_night_offer": None,
+            }
+        )
+        start = date.fromisoformat(best["start"])
+        quote_requests = (
+            ("following_night", start + timedelta(days=1), 1),
+            ("two_night", start, 2),
+            ("three_night", start, 3),
+        )
+        for index, (quote_name, quote_start, nights) in enumerate(quote_requests):
+            if index:
+                time.sleep(request_delay)
+            try:
+                quote = find_stay_quote(
+                    quote_start,
+                    nights,
+                    service_id,
+                    best["room_id"],
+                )
+            except Exception as exc:
+                print(f"{quote_name} offer fetch failed for {quote_start}: {exc}")
+                continue
+            if quote:
+                if quote_name == "following_night":
+                    best["following_night_price"] = quote["total_price"]
+                    best["following_night_offer"] = quote["offer_name"]
+                else:
+                    best[f"{quote_name}_total"] = quote["total_price"]
+                    best[f"{quote_name}_offer"] = quote["offer_name"]
     return best
+
+
+def find_stay_quote(start, nights, service_id, room_id):
+    end = start + timedelta(days=nights)
+    query = (
+        f"?correlationId=torggler-monitor&from={start.isoformat()}"
+        f"&to={end.isoformat()}&guestCount=2&guests=%5B%5B18%2C18%5D%5D"
+        f"&lang=de&maxAdults=4&maxChildren=3&sourceId={SOURCE_ID}"
+    )
+    offers = fetch_json(OFFERS_URL + query, browser_fallback=False)
+    if not isinstance(offers, dict):
+        return None
+
+    offer_names = {
+        str(offer.get("offer_id")): offer.get("title")
+        for offer in offers.get("defaultOffers", [])
+        if isinstance(offer, dict) and offer.get("offer_id") is not None
+    }
+    best_quote = None
+    for rate in offers.get("rates", []):
+        if (
+            rate.get("service") != service_id
+            or str(rate.get("room_id")) != str(room_id)
+            or rate.get("price_total") is None
+        ):
+            continue
+        try:
+            total_price = float(rate["price_total"])
+        except (TypeError, ValueError):
+            continue
+        if best_quote is None or total_price < best_quote["total_price"]:
+            offer_name = offer_names.get(str(rate.get("offer_id")))
+            best_quote = {
+                "total_price": total_price,
+                "offer_name": offer_name if offer_name and offer_name.lower() != "tagespreis" else None,
+            }
+    return best_quote
 
 
 def run_scan(cfg):
@@ -337,7 +413,32 @@ def main():
             f"von {best['start']} bis {checkout} ({best['nights']} Nächte) "
             f"(gesamt: €{best['total_price']}; {best['room']} / {best['room_code']})"
         )
-        save_scan(best["price"], best["start"], best["nights"], best["room"])
+        save_scan(
+            best["price"],
+            best["start"],
+            best["nights"],
+            best["room"],
+            following_night_price=best.get("following_night_price"),
+            following_night_offer=best.get("following_night_offer"),
+            two_night_total=best.get("two_night_total"),
+            two_night_offer=best.get("two_night_offer"),
+            three_night_total=best.get("three_night_total"),
+            three_night_offer=best.get("three_night_offer"),
+        )
+
+        following_day = date.fromisoformat(best["start"]) + timedelta(days=1)
+        if best.get("following_night_price") is not None:
+            offer_label = f" ({best['following_night_offer']})" if best.get("following_night_offer") else ""
+            print(
+                f"Following night: €{best['following_night_price']} pro Nacht ab {following_day}{offer_label}"
+            )
+        for nights in (2, 3):
+            total = best.get(f"{('two' if nights == 2 else 'three')}_night_total")
+            if total is not None:
+                offer = best.get(f"{('two' if nights == 2 else 'three')}_night_offer")
+                offer_label = f" ({offer})" if offer else ""
+                checkout_date = date.fromisoformat(best["start"]) + timedelta(days=nights)
+                print(f"{nights}-night stay: €{total} total through {checkout_date}{offer_label}")
 
         threshold = cfg.get("ALARM_THRESHOLD_EUR")
         if threshold is not None and str(threshold).strip() != "":
@@ -350,10 +451,16 @@ def main():
                         f"von {best['start']} bis {checkout} ({best['nights']} Nächte) "
                         f"(gesamt: €{best['total_price']}; {best['room']} / {best['room_code']})"
                     )
+                    if best.get("two_night_total") is not None:
+                        content += f"<br>2 Nächte: €{best['two_night_total']} gesamt"
+                    if best.get("three_night_total") is not None:
+                        content += f"<br>3 Nächte: €{best['three_night_total']} gesamt"
                     send_email(subject, content, cfg)
                     print("Email sent")
             except Exception as exc:
                 print("Alert error:", exc)
+        else:
+            print("Email alert skipped: ALARM_THRESHOLD_EUR is not configured")
     except Exception as exc:
         import traceback
         import sys

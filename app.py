@@ -1,8 +1,9 @@
 from flask import Flask, jsonify, render_template
-from db import latest_scan, get_history
+from db import latest_scan, get_history, init_db
 import os
 
 app = Flask(__name__, template_folder="./templates")
+init_db()
 
 
 @app.route('/api/current')

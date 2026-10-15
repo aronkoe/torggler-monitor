@@ -60,6 +60,8 @@ def load_config():
         "MAX_NIGHTS",
         "LOOKAHEAD_DAYS",
         "ALARM_THRESHOLD_EUR",
+        "ALARM_THRESHOLD_2_NIGHTS_TOTAL_EUR",
+        "ALARM_THRESHOLD_3_NIGHTS_TOTAL_EUR",
         "SCRAPER_PROXY_URL",
     ]
     for key in env_keys:
@@ -509,33 +511,57 @@ def main():
                     f"through {stay_checkout} ({stay_room}{offer_label})"
                 )
 
-        threshold = cfg.get("ALARM_THRESHOLD_EUR")
-        if threshold is not None and str(threshold).strip() != "":
+        alert_rules = (
+            ("ALARM_THRESHOLD_EUR", 1, "price"),
+            ("ALARM_THRESHOLD_2_NIGHTS_TOTAL_EUR", 2, "two_night_total"),
+            ("ALARM_THRESHOLD_3_NIGHTS_TOTAL_EUR", 3, "three_night_total"),
+        )
+        configured_rules = 0
+        triggered_alerts = []
+        for threshold_key, nights, price_key in alert_rules:
+            threshold = cfg.get(threshold_key)
+            if threshold is None or str(threshold).strip() == "":
+                continue
             try:
-                thresh_val = float(threshold)
-                if float(best["price"]) <= thresh_val:
-                    subject = f"Preisalarm: €{best['price']}/Nacht inkl. {best['board_type']}"
-                    content = (
-                        f"Gefunden: €{best['price']} pro Nacht inkl. {best['board_type']} "
-                        f"von {best['start']} bis {checkout} ({best['nights']} Nächte) "
-                        f"(gesamt: €{best['total_price']}; {best['room']} / {best['room_code']})"
-                    )
-                    for nights, prefix in ((2, "two"), (3, "three")):
-                        stay_total = best.get(f"{prefix}_night_total")
-                        if stay_total is not None:
-                            stay_start = date.fromisoformat(best[f"{prefix}_night_start"])
-                            stay_checkout = stay_start + timedelta(days=nights)
-                            stay_room = best.get(f"{prefix}_night_room") or best["room"]
-                            content += (
-                                f"<br>{nights} Nächte: {stay_start} bis {stay_checkout}; "
-                                f"{stay_room}; gesamt €{stay_total}"
-                            )
-                    send_email(subject, content, cfg)
-                    print("Email sent")
+                threshold = float(threshold)
+            except (TypeError, ValueError):
+                print(f"Email alert disabled: {threshold_key} is not numeric")
+                continue
+            configured_rules += 1
+            price = best.get(price_key)
+            if price is None or float(price) > threshold:
+                continue
+
+            if nights == 1:
+                stay_start = date.fromisoformat(best["start"])
+                stay_room = best["room"]
+                stay_total = best["total_price"]
+                subject = f"Preisalarm: €{best['price']}/Nacht inkl. {best['board_type']}"
+            else:
+                prefix = "two" if nights == 2 else "three"
+                stay_start = date.fromisoformat(best[f"{prefix}_night_start"])
+                stay_room = best.get(f"{prefix}_night_room") or best["room"]
+                stay_total = best[f"{prefix}_night_total"]
+                subject = f"Preisalarm: {nights} Nächte für €{stay_total} inkl. {best['board_type']}"
+
+            stay_checkout = stay_start + timedelta(days=nights)
+            content = (
+                f"Aufenthalt: {stay_start} bis {stay_checkout} ({nights} Nächte)<br>"
+                f"Zimmer: {stay_room}<br>"
+                f"Gesamt: €{stay_total}"
+            )
+            if nights > 1:
+                content += f"<br>Durchschnitt: €{float(stay_total) / nights:.2f} pro Nacht"
+            triggered_alerts.append((subject, content))
+
+        if configured_rules == 0:
+            print("Email alert skipped: no alert thresholds are configured")
+        for subject, content in triggered_alerts:
+            try:
+                status_code, _ = send_email(subject, content, cfg)
+                print(f"Email sent (HTTP {status_code})")
             except Exception as exc:
                 print("Alert error:", exc)
-        else:
-            print("Email alert skipped: ALARM_THRESHOLD_EUR is not configured")
     except Exception as exc:
         import traceback
         import sys
